@@ -6,7 +6,6 @@ __pycache__/
 *$py.class
 
 # Data folders
-scalogram/
 prpd_images_for_cnn/
 PD-data-24-6-2025/
 data/
@@ -238,7 +237,3 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-<<<<<<< HEAD
-
-=======
->>>>>>> 2abdc80e32c6fb01ad72a917db4a8e9275b6fa7e

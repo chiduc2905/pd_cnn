@@ -1,12 +1,19 @@
+# Core dependencies
 torch>=2.0.0
 torchvision>=0.15.0
 numpy>=1.21.0
+
+# ML/Data Science
 scikit-learn>=1.0.0
-tqdm>=4.60.0
-Pillow>=8.0.0
+scipy>=1.7.0
+
+# Visualization
 matplotlib>=3.0.0
 seaborn>=0.11.0
-scipy>=1.7.0
-tsnecuda; platform_system == "Linux"
-wandb>=0.12.0
+Pillow>=8.0.0
 
+# Utilities
+tqdm>=4.60.0
+
+# Experiment tracking
+wandb>=0.12.0
