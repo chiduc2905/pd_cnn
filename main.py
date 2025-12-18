@@ -77,6 +77,8 @@ def get_args():
     # Other
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'])
+    parser.add_argument('--gpu', type=int, default=0,
+                        help='GPU id to use (default: 0)')
     parser.add_argument('--project', type=str, default='pd_cnn',
                         help='WandB project name')
     
@@ -453,7 +455,12 @@ def main():
     args = get_args()
     seed_everything(args.seed)
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Set GPU device
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu)
+        device = torch.device(f'cuda:{args.gpu}')
+    else:
+        device = torch.device('cpu')
     print(f'\nDevice: {device}')
     
     # Create directories

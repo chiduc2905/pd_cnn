@@ -25,12 +25,13 @@ PRETRAINED = [True, False]
 TRAINING_SAMPLES = [18, 60, None]
 
 
-def run_experiment(model: str, pretrained: bool, training_samples: int = None, **kwargs):
+def run_experiment(model: str, pretrained: bool, training_samples: int = None, gpu: int = 0, **kwargs):
     """Run a single experiment."""
     cmd = [
         sys.executable, 'main.py',
         '--model', model,
         '--mode', 'train',
+        '--gpu', str(gpu),
     ]
     
     if pretrained:
@@ -109,6 +110,8 @@ if __name__ == '__main__':
                         help='Only run scratch experiments')
     parser.add_argument('--samples', nargs='+', type=int, default=None,
                         help='Training sample sizes (default: 18, 60, all). Use 0 for all samples.')
+    parser.add_argument('--gpu', type=int, default=0,
+                        help='GPU id to use (default: 0)')
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--dataset_path', type=str, default='./scalogram/')
@@ -125,6 +128,7 @@ if __name__ == '__main__':
         pretrained_only=args.pretrained_only,
         scratch_only=args.scratch_only,
         training_samples_list=training_samples,
+        gpu=args.gpu,
         num_epochs=args.num_epochs,
         batch_size=args.batch_size,
         dataset_path=args.dataset_path
