@@ -1,6 +1,9 @@
 """Run all CNN experiments for PD classification.
 
-Trains all 6 models with pretrained weights.
+Trains all 6 models with pretrained weights using proper transfer learning:
+  - Phase 1: Freeze backbone, train classifier (20 epochs)
+  - Phase 2: Fine-tune entire network with discriminative LR (80 epochs)
+  
 Training samples: 18, 60, and all.
 """
 import subprocess
@@ -20,15 +23,21 @@ MODELS = [
 # Training sample configurations (None = all samples)
 TRAINING_SAMPLES = [18, 60, None]
 
+# Transfer learning settings (unified for fair comparison)
+DEFAULT_FREEZE_EPOCHS = 20
+DEFAULT_NUM_EPOCHS = 100
 
-def run_experiment(model: str, training_samples: int = None, gpu: int = 0, **kwargs):
-    """Run a single experiment with pretrained weights."""
+
+def run_experiment(model: str, training_samples: int = None, gpu: int = 0, 
+                   freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, **kwargs):
+    """Run a single experiment with pretrained weights and transfer learning."""
     cmd = [
         sys.executable, 'main.py',
         '--model', model,
         '--mode', 'train',
         '--gpu', str(gpu),
         '--pretrained',  # Always use pretrained
+        '--freeze_epochs', str(freeze_epochs),
     ]
     
     if training_samples is not None:
@@ -42,6 +51,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0, **kwa
     
     print(f'\n{"="*60}')
     print(f'Running: {model} | pretrained | {samples_str}')
+    print(f'Transfer Learning: {freeze_epochs} epochs freeze + {kwargs.get("num_epochs", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
     print(f'{"="*60}\n')
     
     result = subprocess.run(cmd, check=False)
@@ -52,7 +62,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0, **kwa
     return True
 
 
-def run_all(models=None, training_samples_list=None, **kwargs):
+def run_all(models=None, training_samples_list=None, freeze_epochs=DEFAULT_FREEZE_EPOCHS, **kwargs):
     """Run all experiments with pretrained weights."""
     models = models or MODELS
     training_samples_list = training_samples_list or TRAINING_SAMPLES
@@ -64,13 +74,15 @@ def run_all(models=None, training_samples_list=None, **kwargs):
     for model, samples in product(models, training_samples_list):
         current += 1
         print(f'\n[{current}/{total_experiments}] Starting experiment...')
-        success = run_experiment(model, samples, **kwargs)
+        success = run_experiment(model, samples, freeze_epochs=freeze_epochs, **kwargs)
         results.append((model, samples, success))
     
     # Summary
     print(f'\n{"="*60}')
     print('SUMMARY')
     print(f'{"="*60}')
+    print(f'Transfer Learning: {freeze_epochs} epochs freeze, then fine-tune')
+    print(f'{"-"*60}')
     
     for model, samples, success in results:
         samples_str = f'{samples}' if samples else 'all'
@@ -85,14 +97,17 @@ def run_all(models=None, training_samples_list=None, **kwargs):
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Run all CNN experiments (pretrained)')
+    parser = argparse.ArgumentParser(description='Run all CNN experiments (pretrained with transfer learning)')
     parser.add_argument('--models', nargs='+', choices=MODELS, default=None,
                         help='Specific models to run (default: all)')
     parser.add_argument('--samples', nargs='+', type=int, default=None,
                         help='Training sample sizes (default: 18, 60, all). Use 0 for all samples.')
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU id to use (default: 0)')
-    parser.add_argument('--num_epochs', type=int, default=100)
+    parser.add_argument('--num_epochs', type=int, default=DEFAULT_NUM_EPOCHS,
+                        help=f'Total epochs (default: {DEFAULT_NUM_EPOCHS})')
+    parser.add_argument('--freeze_epochs', type=int, default=DEFAULT_FREEZE_EPOCHS,
+                        help=f'Epochs with frozen backbone (default: {DEFAULT_FREEZE_EPOCHS})')
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--dataset_path', type=str, default='./scalogram/')
     
@@ -108,6 +123,7 @@ if __name__ == '__main__':
         training_samples_list=training_samples,
         gpu=args.gpu,
         num_epochs=args.num_epochs,
+        freeze_epochs=args.freeze_epochs,
         batch_size=args.batch_size,
         dataset_path=args.dataset_path
     )

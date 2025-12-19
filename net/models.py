@@ -2,6 +2,12 @@
 
 Provides smallest versions of popular architectures with pretrained/scratch support.
 All models output logits for num_classes.
+
+Transfer Learning Support:
+- freeze_backbone(): Freeze all backbone layers, only train classifier
+- unfreeze_backbone(): Unfreeze all layers for fine-tuning
+- get_classifier_params(): Get only classifier parameters
+- get_backbone_params(): Get only backbone parameters
 """
 import torch
 import torch.nn as nn
@@ -68,7 +74,108 @@ def get_model(model_name: str, num_classes: int = 3, pretrained: bool = True) ->
         available = list(MODEL_INFO.keys())
         raise ValueError(f"Unknown model: {model_name}. Available: {available}")
     
+    # Store model name for later use
+    model._model_name = model_name
+    
     return model
+
+
+def freeze_backbone(model: nn.Module) -> None:
+    """
+    Freeze all backbone layers, only classifier head remains trainable.
+    
+    This is Phase 1 of transfer learning: feature extraction.
+    """
+    model_name = getattr(model, '_model_name', '')
+    
+    # First freeze everything
+    for param in model.parameters():
+        param.requires_grad = False
+    
+    # Then unfreeze classifier head based on model architecture
+    if model_name == 'squeezenet1_1':
+        for param in model.classifier.parameters():
+            param.requires_grad = True
+            
+    elif model_name == 'shufflenetv2_x0_5':
+        for param in model.fc.parameters():
+            param.requires_grad = True
+            
+    elif model_name in ['mobilenetv3_small', 'efficientnet_b0']:
+        for param in model.classifier.parameters():
+            param.requires_grad = True
+            
+    elif model_name == 'densenet121':
+        for param in model.classifier.parameters():
+            param.requires_grad = True
+            
+    elif model_name == 'resnet18':
+        for param in model.fc.parameters():
+            param.requires_grad = True
+    else:
+        # Fallback: try common classifier names
+        if hasattr(model, 'fc'):
+            for param in model.fc.parameters():
+                param.requires_grad = True
+        elif hasattr(model, 'classifier'):
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+
+
+def unfreeze_backbone(model: nn.Module) -> None:
+    """
+    Unfreeze all layers for fine-tuning.
+    
+    This is Phase 2 of transfer learning: fine-tuning entire network.
+    """
+    for param in model.parameters():
+        param.requires_grad = True
+
+
+def get_classifier_params(model: nn.Module):
+    """
+    Get only classifier head parameters.
+    
+    Returns:
+        Generator of classifier parameters
+    """
+    model_name = getattr(model, '_model_name', '')
+    
+    if model_name == 'squeezenet1_1':
+        return model.classifier.parameters()
+    elif model_name == 'shufflenetv2_x0_5':
+        return model.fc.parameters()
+    elif model_name in ['mobilenetv3_small', 'efficientnet_b0', 'densenet121']:
+        return model.classifier.parameters()
+    elif model_name == 'resnet18':
+        return model.fc.parameters()
+    else:
+        # Fallback
+        if hasattr(model, 'fc'):
+            return model.fc.parameters()
+        elif hasattr(model, 'classifier'):
+            return model.classifier.parameters()
+        return iter([])  # Empty iterator
+
+
+def get_backbone_params(model: nn.Module):
+    """
+    Get only backbone parameters (excluding classifier head).
+    
+    Returns:
+        Generator of backbone parameters
+    """
+    model_name = getattr(model, '_model_name', '')
+    classifier_params = set()
+    
+    # Get classifier parameter IDs
+    for p in get_classifier_params(model):
+        classifier_params.add(id(p))
+    
+    # Return all non-classifier parameters
+    for param in model.parameters():
+        if id(param) not in classifier_params:
+            yield param
 
 
 def get_available_models():
@@ -95,5 +202,16 @@ if __name__ == '__main__':
     print("Available models:")
     for name, info in MODEL_INFO.items():
         model = get_model(name, num_classes=3, pretrained=False)
-        params = count_parameters(model)
-        print(f"  {name}: {params:,} params ({info['params']} expected)")
+        total_params = count_parameters(model, trainable_only=False)
+        
+        # Test freeze/unfreeze
+        freeze_backbone(model)
+        frozen_trainable = count_parameters(model, trainable_only=True)
+        
+        unfreeze_backbone(model)
+        unfrozen_trainable = count_parameters(model, trainable_only=True)
+        
+        print(f"  {name}:")
+        print(f"    Total: {total_params:,}")
+        print(f"    Trainable (frozen backbone): {frozen_trainable:,}")
+        print(f"    Trainable (unfrozen): {unfrozen_trainable:,}")

@@ -1,6 +1,10 @@
 """PD Scalogram Classification - Standard CNN Training.
 
 Training pipeline for CNN-based PD classification using pretrained or scratch models.
+Implements proper transfer learning with 2-phase training:
+  - Phase 1: Feature extraction (frozen backbone, train classifier only)
+  - Phase 2: Fine-tuning (unfreeze backbone, discriminative learning rates)
+
 Includes WandB logging, confusion matrix, t-SNE visualization.
 """
 import os
@@ -18,7 +22,10 @@ from scipy.stats import norm
 import wandb
 
 from dataset import load_dataset
-from net.models import get_model, get_available_models, count_parameters
+from net.models import (
+    get_model, get_available_models, count_parameters,
+    freeze_backbone, unfreeze_backbone, get_classifier_params, get_backbone_params
+)
 from function.function import plot_confusion_matrix, plot_tsne
 
 
@@ -50,10 +57,18 @@ def get_args():
                         help='Batch size (default: 16, suitable for few-shot scenarios)')
     parser.add_argument('--num_epochs', type=int, default=100,
                         help='Number of epochs (default: 100)')
-    parser.add_argument('--lr', type=float, default=1e-3,
-                        help='Learning rate for scratch training (default: 1e-3)')
-    parser.add_argument('--lr_pretrained', type=float, default=1e-4,
-                        help='Learning rate for pretrained fine-tuning (default: 1e-4)')
+    
+    # Transfer learning settings
+    parser.add_argument('--freeze_epochs', type=int, default=20,
+                        help='Epochs to train with frozen backbone (Phase 1, default: 20)')
+    parser.add_argument('--lr_classifier', type=float, default=1e-3,
+                        help='Learning rate for classifier during Phase 1 (default: 1e-3)')
+    parser.add_argument('--lr_backbone', type=float, default=1e-5,
+                        help='Learning rate for backbone during Phase 2 (default: 1e-5)')
+    parser.add_argument('--lr_classifier_finetune', type=float, default=1e-4,
+                        help='Learning rate for classifier during Phase 2 (default: 1e-4)')
+    
+    # Regularization
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='Weight decay (L2 regularization)')
     parser.add_argument('--patience', type=int, default=15,
@@ -199,93 +214,207 @@ def extract_features(model, images):
     return features
 
 
-def train(model, train_loader, val_loader, args, device):
-    """Full training loop with early stopping."""
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    
-    # Use different LR for pretrained vs scratch
-    lr = args.lr_pretrained if args.pretrained else args.lr
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=args.weight_decay)
-    
-    # Scheduler
-    if args.scheduler == 'step':
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-    elif args.scheduler == 'cosine':
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_epochs)
+def create_optimizer_phase1(model, args):
+    """Create optimizer for Phase 1 (frozen backbone, train classifier only)."""
+    classifier_params = list(get_classifier_params(model))
+    return optim.AdamW(classifier_params, lr=args.lr_classifier, weight_decay=args.weight_decay)
+
+
+def create_optimizer_phase2(model, args):
+    """Create optimizer for Phase 2 (fine-tune with discriminative LR)."""
+    # Discriminative learning rates: lower LR for backbone, higher for classifier
+    param_groups = [
+        {'params': list(get_backbone_params(model)), 'lr': args.lr_backbone},
+        {'params': list(get_classifier_params(model)), 'lr': args.lr_classifier_finetune}
+    ]
+    return optim.AdamW(param_groups, weight_decay=args.weight_decay)
+
+
+def create_scheduler(optimizer, scheduler_type, args, num_epochs):
+    """Create learning rate scheduler."""
+    if scheduler_type == 'step':
+        return lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
+    elif scheduler_type == 'cosine':
+        return lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
     else:  # plateau
-        scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=5, factor=0.5)
+        return lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=5, factor=0.5)
+
+
+def train(model, train_loader, val_loader, args, device):
+    """
+    Full training loop with 2-phase transfer learning.
     
+    Phase 1: Feature Extraction (frozen backbone)
+        - Train only classifier head
+        - Higher learning rate (1e-3)
+        
+    Phase 2: Fine-tuning (unfrozen backbone)  
+        - Train entire network
+        - Discriminative LR: backbone (1e-5), classifier (1e-4)
+    """
+    criterion = nn.CrossEntropyLoss()
     best_val_acc = 0.0
     patience_counter = 0
+    current_phase = 1
     
-    for epoch in range(1, args.num_epochs + 1):
-        # Train
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+    # =========================================================================
+    # Phase 1: Feature Extraction (Frozen Backbone)
+    # =========================================================================
+    if args.pretrained and args.freeze_epochs > 0:
+        print(f'\n{"="*60}')
+        print(f'PHASE 1: Feature Extraction (Frozen Backbone)')
+        print(f'Epochs: 1-{args.freeze_epochs} | LR: {args.lr_classifier}')
+        print(f'{"="*60}\n')
         
-        # Validate
-        val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device)
+        freeze_backbone(model)
+        trainable_params = count_parameters(model, trainable_only=True)
+        print(f'Trainable parameters (classifier only): {trainable_params:,}')
         
-        # Scheduler step
-        if args.scheduler == 'plateau':
-            scheduler.step(val_acc)
-        else:
-            scheduler.step()
+        optimizer = create_optimizer_phase1(model, args)
+        scheduler = create_scheduler(optimizer, args.scheduler, args, args.freeze_epochs)
         
-        current_lr = optimizer.param_groups[0]['lr']
-        
-        # Calculate train-val gap
-        train_val_gap = train_acc - val_acc
-        
-        print(f'Epoch {epoch:3d}/{args.num_epochs} | '
-              f'Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | '
-              f'Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f} (gap={train_val_gap:+.4f}) | '
-              f'LR: {current_lr:.2e}')
-        
-        # Log to WandB with grouped metrics
-        wandb.log({
-            'epoch': epoch,
-            # Grouped for combined charts
-            'loss/train': train_loss,
-            'loss/val': val_loss,
-            'accuracy/train': train_acc,
-            'accuracy/val': val_acc,
-            # Individual metrics  
-            'train_loss': train_loss,
-            'val_loss': val_loss,
-            'train_acc': train_acc,
-            'val_acc': val_acc,
-            'train_val_gap': train_val_gap,
-            'lr': current_lr
-        })
-        
-        # Save best model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            patience_counter = 0
+        for epoch in range(1, args.freeze_epochs + 1):
+            train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+            val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device)
             
-            pretrained_str = 'pretrained' if args.pretrained else 'scratch'
-            samples_str = f'_{args.training_samples}samples' if args.training_samples else ''
-            save_path = os.path.join(args.path_weights, 
-                                     f'{args.model}_{pretrained_str}{samples_str}_best.pth')
-            torch.save({
+            if args.scheduler == 'plateau':
+                scheduler.step(val_acc)
+            else:
+                scheduler.step()
+            
+            current_lr = optimizer.param_groups[0]['lr']
+            train_val_gap = train_acc - val_acc
+            
+            print(f'[P1] Epoch {epoch:3d}/{args.freeze_epochs} | '
+                  f'Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | '
+                  f'Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f} (gap={train_val_gap:+.4f}) | '
+                  f'LR: {current_lr:.2e}')
+            
+            wandb.log({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                'phase': 1,
+                'loss/train': train_loss,
+                'loss/val': val_loss,
+                'accuracy/train': train_acc,
+                'accuracy/val': val_acc,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'train_acc': train_acc,
                 'val_acc': val_acc,
-                'args': vars(args)
-            }, save_path)
-            print(f'  → Best model saved ({val_acc:.4f})')
-            wandb.run.summary['best_val_acc'] = best_val_acc
-        else:
-            patience_counter += 1
+                'train_val_gap': train_val_gap,
+                'lr': current_lr
+            })
             
-        # Early stopping
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                patience_counter = 0
+                _save_checkpoint(model, optimizer, epoch, val_acc, args, phase=1)
+                print(f'  → Best model saved ({val_acc:.4f})')
+                wandb.run.summary['best_val_acc'] = best_val_acc
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= args.patience:
+                print(f'\nEarly stopping at Phase 1, epoch {epoch}')
+                break
+    
+    # =========================================================================
+    # Phase 2: Fine-tuning (Unfrozen Backbone)
+    # =========================================================================
+    phase2_epochs = args.num_epochs - args.freeze_epochs if args.pretrained else args.num_epochs
+    start_epoch = args.freeze_epochs + 1 if args.pretrained else 1
+    
+    if phase2_epochs > 0:
+        current_phase = 2
+        print(f'\n{"="*60}')
+        if args.pretrained:
+            print(f'PHASE 2: Fine-tuning (Unfrozen Backbone)')
+            print(f'Epochs: {start_epoch}-{args.num_epochs} | LR: backbone={args.lr_backbone}, classifier={args.lr_classifier_finetune}')
+        else:
+            print(f'Training from Scratch')
+            print(f'Epochs: 1-{args.num_epochs}')
+        print(f'{"="*60}\n')
+        
+        unfreeze_backbone(model)
+        trainable_params = count_parameters(model, trainable_only=True)
+        print(f'Trainable parameters (all): {trainable_params:,}')
+        
+        if args.pretrained:
+            optimizer = create_optimizer_phase2(model, args)
+        else:
+            # From scratch: use single LR for all params
+            optimizer = optim.AdamW(model.parameters(), lr=args.lr_classifier, weight_decay=args.weight_decay)
+        
+        scheduler = create_scheduler(optimizer, args.scheduler, args, phase2_epochs)
+        
+        # Reset patience for phase 2 if we had early stopping in phase 1
         if patience_counter >= args.patience:
-            print(f'\nEarly stopping at epoch {epoch} (patience={args.patience})')
-            break
+            patience_counter = 0
+        
+        for epoch in range(start_epoch, args.num_epochs + 1):
+            train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+            val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device)
+            
+            if args.scheduler == 'plateau':
+                scheduler.step(val_acc)
+            else:
+                scheduler.step()
+            
+            # Get LR (for discriminative LR, show backbone LR)
+            current_lr = optimizer.param_groups[0]['lr']
+            train_val_gap = train_acc - val_acc
+            
+            phase_str = 'P2' if args.pretrained else 'TR'
+            print(f'[{phase_str}] Epoch {epoch:3d}/{args.num_epochs} | '
+                  f'Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | '
+                  f'Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f} (gap={train_val_gap:+.4f}) | '
+                  f'LR: {current_lr:.2e}')
+            
+            wandb.log({
+                'epoch': epoch,
+                'phase': 2 if args.pretrained else 0,
+                'loss/train': train_loss,
+                'loss/val': val_loss,
+                'accuracy/train': train_acc,
+                'accuracy/val': val_acc,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'train_acc': train_acc,
+                'val_acc': val_acc,
+                'train_val_gap': train_val_gap,
+                'lr': current_lr
+            })
+            
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                patience_counter = 0
+                _save_checkpoint(model, optimizer, epoch, val_acc, args, phase=2)
+                print(f'  → Best model saved ({val_acc:.4f})')
+                wandb.run.summary['best_val_acc'] = best_val_acc
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= args.patience:
+                print(f'\nEarly stopping at Phase 2, epoch {epoch} (patience={args.patience})')
+                break
     
     return best_val_acc
+
+
+def _save_checkpoint(model, optimizer, epoch, val_acc, args, phase=1):
+    """Save model checkpoint."""
+    pretrained_str = 'pretrained' if args.pretrained else 'scratch'
+    samples_str = f'_{args.training_samples}samples' if args.training_samples else ''
+    save_path = os.path.join(args.path_weights, 
+                             f'{args.model}_{pretrained_str}{samples_str}_best.pth')
+    torch.save({
+        'epoch': epoch,
+        'phase': phase,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'val_acc': val_acc,
+        'args': vars(args)
+    }, save_path)
 
 
 # =============================================================================
@@ -359,6 +488,7 @@ def test(model, test_loader, args, device):
         f.write(f'Model: {args.model}\n')
         f.write(f'Pretrained: {args.pretrained}\n')
         f.write(f'Training Samples: {args.training_samples if args.training_samples else "All"}\n')
+        f.write(f'Freeze Epochs: {args.freeze_epochs}\n')
         f.write('-' * 30 + '\n')
         f.write(f'Accuracy : {test_acc:.4f}\n')
         f.write(f'Precision: {prec:.4f}\n')
@@ -546,23 +676,32 @@ def main():
         job_type=args.mode
     )
     
-    # Log model parameters (total only)
+    # Log model parameters and transfer learning config
     wandb.log({
         'model/total_parameters': total_params,
         'model/trainable_parameters': trainable_params,
+        'transfer_learning/freeze_epochs': args.freeze_epochs,
+        'transfer_learning/lr_classifier': args.lr_classifier,
+        'transfer_learning/lr_backbone': args.lr_backbone,
+        'transfer_learning/lr_classifier_finetune': args.lr_classifier_finetune,
     })
     
-    print(f'\n{"="*50}')
+    print(f'\n{"="*60}')
     print(f'Model: {args.model}')
-    print(f'{"="*50}')
+    print(f'{"="*60}')
     print(f'Total Parameters: {total_params:,}')
-    print(f'Trainable Parameters: {trainable_params:,}')
-    print(f'{"="*50}\n')
+    print(f'Transfer Learning: {"Enabled" if args.pretrained else "Disabled (from scratch)"}')
+    if args.pretrained:
+        print(f'  Phase 1 (Freeze): {args.freeze_epochs} epochs, LR={args.lr_classifier}')
+        print(f'  Phase 2 (Fine-tune): {args.num_epochs - args.freeze_epochs} epochs')
+        print(f'    Backbone LR: {args.lr_backbone}')
+        print(f'    Classifier LR: {args.lr_classifier_finetune}')
+    print(f'{"="*60}\n')
     
     if args.mode == 'train':
         print(f'Training: {args.model} | {"Pretrained" if args.pretrained else "Scratch"}')
-        print(f'Epochs: {args.num_epochs} | Batch: {args.batch_size} | LR: {args.lr_pretrained if args.pretrained else args.lr}')
-        print(f'{"="*50}\n')
+        print(f'Epochs: {args.num_epochs} | Batch: {args.batch_size}')
+        print(f'{"="*60}\n')
         
         best_acc = train(model, train_loader, val_loader, args, device)
         
