@@ -27,6 +27,7 @@ from net.models import (
     freeze_backbone, unfreeze_backbone, get_classifier_params, get_backbone_params
 )
 from function.function import plot_confusion_matrix, plot_tsne
+import matplotlib.pyplot as plt
 
 
 # =============================================================================
@@ -240,6 +241,81 @@ def create_scheduler(optimizer, scheduler_type, args, num_epochs):
         return lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=5, factor=0.5)
 
 
+def plot_training_curves(history, save_dir, model_name, pretrained, training_samples):
+    """
+    Plot training/validation accuracy and loss curves.
+    
+    Args:
+        history: dict with keys 'train_acc', 'val_acc', 'train_loss', 'val_loss'
+        save_dir: directory to save plots
+        model_name: model architecture name
+        pretrained: whether pretrained weights were used
+        training_samples: number of training samples (or None for all)
+    """
+    pretrained_str = 'pretrained' if pretrained else 'scratch'
+    samples_str = f'_{training_samples}samples' if training_samples else '_allsamples'
+    
+    epochs = range(1, len(history['train_acc']) + 1)
+    
+    # Create figure with 2 subplots
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # === Accuracy Plot ===
+    ax1 = axes[0]
+    ax1.plot(epochs, [acc * 100 for acc in history['train_acc']], 
+             'b-', linewidth=2, label='Train Accuracy', marker='o', markersize=3)
+    ax1.plot(epochs, [acc * 100 for acc in history['val_acc']], 
+             'r-', linewidth=2, label='Val Accuracy', marker='s', markersize=3)
+    
+    ax1.set_xlabel('Epoch', fontsize=12)
+    ax1.set_ylabel('Accuracy (%)', fontsize=12)
+    ax1.set_title(f'{model_name} ({pretrained_str}) - Accuracy', fontsize=14, fontweight='bold')
+    ax1.legend(loc='lower right', fontsize=10)
+    ax1.grid(True, linestyle='--', alpha=0.7)
+    ax1.set_ylim([0, 105])
+    
+    # Mark best val accuracy
+    best_val_idx = history['val_acc'].index(max(history['val_acc']))
+    best_val_acc = history['val_acc'][best_val_idx] * 100
+    ax1.axhline(y=best_val_acc, color='g', linestyle='--', alpha=0.5)
+    ax1.annotate(f'Best: {best_val_acc:.1f}%', 
+                 xy=(best_val_idx + 1, best_val_acc),
+                 xytext=(best_val_idx + 1, best_val_acc + 3),
+                 fontsize=9, color='green')
+    
+    # === Loss Plot ===
+    ax2 = axes[1]
+    ax2.plot(epochs, history['train_loss'], 
+             'b-', linewidth=2, label='Train Loss', marker='o', markersize=3)
+    ax2.plot(epochs, history['val_loss'], 
+             'r-', linewidth=2, label='Val Loss', marker='s', markersize=3)
+    
+    ax2.set_xlabel('Epoch', fontsize=12)
+    ax2.set_ylabel('Loss', fontsize=12)
+    ax2.set_title(f'{model_name} ({pretrained_str}) - Loss', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=10)
+    ax2.grid(True, linestyle='--', alpha=0.7)
+    
+    # Mark best val loss
+    best_loss_idx = history['val_loss'].index(min(history['val_loss']))
+    best_val_loss = history['val_loss'][best_loss_idx]
+    ax2.axhline(y=best_val_loss, color='g', linestyle='--', alpha=0.5)
+    ax2.annotate(f'Best: {best_val_loss:.4f}', 
+                 xy=(best_loss_idx + 1, best_val_loss),
+                 xytext=(best_loss_idx + 1, best_val_loss + 0.05),
+                 fontsize=9, color='green')
+    
+    plt.tight_layout()
+    
+    # Save figure
+    save_path = os.path.join(save_dir, f'training_curves_{model_name}_{pretrained_str}{samples_str}.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+    
+    print(f'Training curves saved to {save_path}')
+    return save_path
+
+
 def train(model, train_loader, val_loader, args, device):
     """
     Full training loop with 2-phase transfer learning.
@@ -256,6 +332,14 @@ def train(model, train_loader, val_loader, args, device):
     best_val_acc = 0.0
     patience_counter = 0
     current_phase = 1
+    
+    # History tracking for plotting
+    history = {
+        'train_acc': [],
+        'val_acc': [],
+        'train_loss': [],
+        'val_loss': []
+    }
     
     # =========================================================================
     # Phase 1: Feature Extraction (Frozen Backbone)
@@ -285,6 +369,12 @@ def train(model, train_loader, val_loader, args, device):
             current_lr = optimizer.param_groups[0]['lr']
             train_val_gap = train_acc - val_acc
             
+            # Track history
+            history['train_acc'].append(train_acc)
+            history['val_acc'].append(val_acc)
+            history['train_loss'].append(train_loss)
+            history['val_loss'].append(val_loss)
+            
             print(f'[P1] Epoch {epoch:3d}/{args.freeze_epochs} | '
                   f'Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | '
                   f'Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f} (gap={train_val_gap:+.4f}) | '
@@ -293,10 +383,6 @@ def train(model, train_loader, val_loader, args, device):
             wandb.log({
                 'epoch': epoch,
                 'phase': 1,
-                'loss/train': train_loss,
-                'loss/val': val_loss,
-                'accuracy/train': train_acc,
-                'accuracy/val': val_acc,
                 'train_loss': train_loss,
                 'val_loss': val_loss,
                 'train_acc': train_acc,
@@ -364,6 +450,12 @@ def train(model, train_loader, val_loader, args, device):
             current_lr = optimizer.param_groups[0]['lr']
             train_val_gap = train_acc - val_acc
             
+            # Track history
+            history['train_acc'].append(train_acc)
+            history['val_acc'].append(val_acc)
+            history['train_loss'].append(train_loss)
+            history['val_loss'].append(val_loss)
+            
             phase_str = 'P2' if args.pretrained else 'TR'
             print(f'[{phase_str}] Epoch {epoch:3d}/{args.num_epochs} | '
                   f'Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | '
@@ -373,10 +465,6 @@ def train(model, train_loader, val_loader, args, device):
             wandb.log({
                 'epoch': epoch,
                 'phase': 2 if args.pretrained else 0,
-                'loss/train': train_loss,
-                'loss/val': val_loss,
-                'accuracy/train': train_acc,
-                'accuracy/val': val_acc,
                 'train_loss': train_loss,
                 'val_loss': val_loss,
                 'train_acc': train_acc,
@@ -398,7 +486,15 @@ def train(model, train_loader, val_loader, args, device):
                 print(f'\nEarly stopping at Phase 2, epoch {epoch} (patience={args.patience})')
                 break
     
-    return best_val_acc
+    # Plot training curves and save locally
+    if len(history['train_acc']) > 0:
+        curves_path = plot_training_curves(
+            history, args.path_results, args.model, args.pretrained, args.training_samples
+        )
+        # Also log to wandb
+        wandb.log({'training_curves': wandb.Image(curves_path)})
+    
+    return best_val_acc, history
 
 
 def _save_checkpoint(model, optimizer, epoch, val_acc, args, phase=1):
@@ -458,7 +554,7 @@ def test(model, test_loader, args, device):
     print(f'F1-Score : {f1:.4f}')
     print(f'p-value  : {p_val:.2e}')
     
-    # Log to WandB
+    # Log final results to WandB (these will show in summary table)
     wandb.log({
         'test_accuracy': test_acc,
         'test_precision': prec,
@@ -467,6 +563,13 @@ def test(model, test_loader, args, device):
         'test_p_value': p_val,
         'test_loss': test_loss
     })
+    
+    # Update summary for table display
+    wandb.run.summary['accuracy'] = test_acc
+    wandb.run.summary['precision'] = prec
+    wandb.run.summary['recall'] = rec
+    wandb.run.summary['f1_score'] = f1
+    wandb.run.summary['p_value'] = p_val
     
     # Confusion Matrix
     cm_path = os.path.join(args.path_results, 
@@ -676,15 +779,11 @@ def main():
         job_type=args.mode
     )
     
-    # Log model parameters and transfer learning config
-    wandb.log({
-        'model/total_parameters': total_params,
-        'model/trainable_parameters': trainable_params,
-        'transfer_learning/freeze_epochs': args.freeze_epochs,
-        'transfer_learning/lr_classifier': args.lr_classifier,
-        'transfer_learning/lr_backbone': args.lr_backbone,
-        'transfer_learning/lr_classifier_finetune': args.lr_classifier_finetune,
-    })
+    # Set config summary (not cluttering the table with per-step logs)
+    wandb.run.summary['total_parameters'] = total_params
+    wandb.run.summary['model_name'] = args.model
+    wandb.run.summary['pretrained'] = args.pretrained
+    wandb.run.summary['training_samples'] = args.training_samples if args.training_samples else 'all'
     
     print(f'\n{"="*60}')
     print(f'Model: {args.model}')
@@ -703,7 +802,7 @@ def main():
         print(f'Epochs: {args.num_epochs} | Batch: {args.batch_size}')
         print(f'{"="*60}\n')
         
-        best_acc = train(model, train_loader, val_loader, args, device)
+        best_acc, history = train(model, train_loader, val_loader, args, device)
         
         # Load best model and test
         pretrained_str = 'pretrained' if args.pretrained else 'scratch'
