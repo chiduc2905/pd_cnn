@@ -1,8 +1,7 @@
 """Run all CNN experiments for PD classification.
 
-Trains all 6 models with:
-- Both pretrained and scratch settings
-- Training samples: 18, 60, and all
+Trains all 6 models with pretrained weights.
+Training samples: 18, 60, and all.
 """
 import subprocess
 import sys
@@ -18,24 +17,19 @@ MODELS = [
     'resnet18',           # 11.7M
 ]
 
-# Pretrained settings
-PRETRAINED = [True, False]
-
 # Training sample configurations (None = all samples)
 TRAINING_SAMPLES = [18, 60, None]
 
 
-def run_experiment(model: str, pretrained: bool, training_samples: int = None, gpu: int = 0, **kwargs):
-    """Run a single experiment."""
+def run_experiment(model: str, training_samples: int = None, gpu: int = 0, **kwargs):
+    """Run a single experiment with pretrained weights."""
     cmd = [
         sys.executable, 'main.py',
         '--model', model,
         '--mode', 'train',
         '--gpu', str(gpu),
+        '--pretrained',  # Always use pretrained
     ]
-    
-    if pretrained:
-        cmd.append('--pretrained')
     
     if training_samples is not None:
         cmd.extend(['--training_samples', str(training_samples)])
@@ -44,70 +38,56 @@ def run_experiment(model: str, pretrained: bool, training_samples: int = None, g
     for key, value in kwargs.items():
         cmd.extend([f'--{key}', str(value)])
     
-    pretrained_str = 'pretrained' if pretrained else 'scratch'
     samples_str = f'{training_samples}samples' if training_samples else 'all'
     
     print(f'\n{"="*60}')
-    print(f'Running: {model} | {pretrained_str} | {samples_str}')
+    print(f'Running: {model} | pretrained | {samples_str}')
     print(f'{"="*60}\n')
     
     result = subprocess.run(cmd, check=False)
     
     if result.returncode != 0:
-        print(f'WARNING: {model} ({pretrained_str}, {samples_str}) failed with code {result.returncode}')
+        print(f'WARNING: {model} ({samples_str}) failed with code {result.returncode}')
         return False
     return True
 
 
-def run_all(models=None, pretrained_only=False, scratch_only=False, 
-            training_samples_list=None, **kwargs):
-    """Run all experiments."""
+def run_all(models=None, training_samples_list=None, **kwargs):
+    """Run all experiments with pretrained weights."""
     models = models or MODELS
     training_samples_list = training_samples_list or TRAINING_SAMPLES
     
-    if pretrained_only:
-        pretrained_settings = [True]
-    elif scratch_only:
-        pretrained_settings = [False]
-    else:
-        pretrained_settings = PRETRAINED
-    
     results = []
-    total_experiments = len(models) * len(pretrained_settings) * len(training_samples_list)
+    total_experiments = len(models) * len(training_samples_list)
     current = 0
     
-    for model, pretrained, samples in product(models, pretrained_settings, training_samples_list):
+    for model, samples in product(models, training_samples_list):
         current += 1
         print(f'\n[{current}/{total_experiments}] Starting experiment...')
-        success = run_experiment(model, pretrained, samples, **kwargs)
-        results.append((model, pretrained, samples, success))
+        success = run_experiment(model, samples, **kwargs)
+        results.append((model, samples, success))
     
     # Summary
     print(f'\n{"="*60}')
     print('SUMMARY')
     print(f'{"="*60}')
     
-    for model, pretrained, samples, success in results:
-        pretrained_str = 'pretrained' if pretrained else 'scratch'
+    for model, samples, success in results:
         samples_str = f'{samples}' if samples else 'all'
         status = '✓' if success else '✗'
-        print(f'{status} {model:20s} | {pretrained_str:10s} | {samples_str:>4s} samples')
+        print(f'{status} {model:20s} | pretrained | {samples_str:>4s} samples')
     
     total = len(results)
-    passed = sum(1 for _, _, _, s in results if s)
+    passed = sum(1 for _, _, s in results if s)
     print(f'\nTotal: {passed}/{total} passed')
 
 
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Run all CNN experiments')
+    parser = argparse.ArgumentParser(description='Run all CNN experiments (pretrained)')
     parser.add_argument('--models', nargs='+', choices=MODELS, default=None,
                         help='Specific models to run (default: all)')
-    parser.add_argument('--pretrained-only', action='store_true',
-                        help='Only run pretrained experiments')
-    parser.add_argument('--scratch-only', action='store_true',
-                        help='Only run scratch experiments')
     parser.add_argument('--samples', nargs='+', type=int, default=None,
                         help='Training sample sizes (default: 18, 60, all). Use 0 for all samples.')
     parser.add_argument('--gpu', type=int, default=0,
@@ -125,8 +105,6 @@ if __name__ == '__main__':
     
     run_all(
         models=args.models,
-        pretrained_only=args.pretrained_only,
-        scratch_only=args.scratch_only,
         training_samples_list=training_samples,
         gpu=args.gpu,
         num_epochs=args.num_epochs,

@@ -72,7 +72,11 @@ def get_args():
     parser.add_argument('--image_size', type=int, default=224,
                         help='Input image size (default: 224 for ImageNet models)')
     parser.add_argument('--training_samples', type=int, default=None,
-                        help='Limit training samples (e.g., 30 = 10/class)')
+                        help='Limit training samples per class (18=6/class, 60=20/class)')
+    parser.add_argument('--val_per_class', type=int, default=60,
+                        help='Validation samples per class (default: 60, total: 180)')
+    parser.add_argument('--test_per_class', type=int, default=60,
+                        help='Test samples per class (default: 60, total: 180)')
     
     # Other
     parser.add_argument('--seed', type=int, default=42)
@@ -469,7 +473,13 @@ def main():
     
     # Load dataset
     print(f'\nLoading dataset from {args.dataset_path}...')
-    dataset = load_dataset(args.dataset_path, image_size=args.image_size)
+    print(f'Val: {args.val_per_class}/class, Test: {args.test_per_class}/class')
+    dataset = load_dataset(
+        args.dataset_path, 
+        image_size=args.image_size,
+        val_per_class=args.val_per_class,
+        test_per_class=args.test_per_class
+    )
     
     # Convert to tensors
     train_X = torch.from_numpy(dataset.X_train.astype(np.float32))
@@ -536,17 +546,11 @@ def main():
         job_type=args.mode
     )
     
-    # Log model parameters
+    # Log model parameters (total only)
     wandb.log({
         'model/total_parameters': total_params,
         'model/trainable_parameters': trainable_params,
     })
-    
-    # Log parameters per layer
-    layer_params = {}
-    for name, param in model.named_parameters():
-        layer_params[f'model/layer_params/{name}'] = param.numel()
-    wandb.config.update({'layer_parameters': layer_params})
     
     print(f'\n{"="*50}')
     print(f'Model: {args.model}')
