@@ -174,33 +174,38 @@ class TripletLoss(nn.Module):
 
 
 def plot_confusion_matrix(targets, preds, num_classes=3, save_path=None, class_names=None):
-    """
-    Plot confusion matrix.
-    
-    For 150-episode test with 1-query/class: each row sums to 150.
+    """Plot confusion matrix in IEEE publication format.
     
     Args:
         targets: Ground truth labels
         preds: Predicted labels
         num_classes: Number of classes
         save_path: Path to save the figure
-        class_names: List of class names (default: ['surface', 'corona', 'nopd'])
+        class_names: List of class names (default: ['Surface', 'Corona', 'NoPD'])
     """
     # Default class names
     if class_names is None:
         class_names = ['Surface', 'Corona', 'NoPD']
     
-    # Set font properties globally for this plot (1.5x scale: 14->21, 16->24, 18->27)
-    plt.rcParams.update({'font.size': 21, 'font.family': 'serif'})
+    # IEEE format: Times New Roman, appropriate font sizes (10-12pt)
+    plt.rcParams.update({
+        'font.size': 10,
+        'font.family': 'serif',
+        'font.serif': ['Times New Roman', 'DejaVu Serif'],
+        'mathtext.fontset': 'stix',
+        'axes.labelsize': 11,
+        'axes.titlesize': 12,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+    })
     
     cm = confusion_matrix(targets, preds)
     row_sums = cm.sum(axis=1, keepdims=True)
     row_sums[row_sums == 0] = 1
     cm_pct = cm / row_sums * 100
     
-    samples_per_class = int(cm.sum(axis=1)[0])
-    
-    fig, ax = plt.subplots(figsize=(10, 9))
+    # IEEE single column width: ~3.5 inches, double column: ~7 inches
+    fig, ax = plt.subplots(figsize=(4.5, 4))
     
     # Annotations: count and percentage
     annot = np.empty_like(cm, dtype=object)
@@ -209,16 +214,19 @@ def plot_confusion_matrix(targets, preds, num_classes=3, save_path=None, class_n
             annot[i, j] = f'{cm[i,j]}\n({cm_pct[i,j]:.1f}%)'
     
     sns.heatmap(cm, annot=annot, fmt='', cmap='Greens',
-                linewidths=2, linecolor='white', ax=ax,
-                annot_kws={'size': 21, 'weight': 'bold'},
-                vmin=0, square=True,
+                linewidths=0.5, linecolor='gray', ax=ax,
+                annot_kws={'size': 9, 'weight': 'normal'},
+                vmin=0, square=True, cbar_kws={'shrink': 0.8},
                 xticklabels=class_names, yticklabels=class_names)
     
-    ax.set_xlabel('Predicted Labels', fontsize=24, fontweight='bold')
-    ax.set_ylabel('Actual Labels', fontsize=24, fontweight='bold')
-    ax.set_title('Confusion Matrix', fontsize=27, fontweight='bold')
-    ax.set_xticklabels(class_names, fontsize=21)
-    ax.set_yticklabels(class_names, rotation=0, fontsize=21)
+    ax.set_xlabel('Predicted Label', fontsize=11)
+    ax.set_ylabel('True Label', fontsize=11)
+    ax.set_xticklabels(class_names, fontsize=10)
+    ax.set_yticklabels(class_names, rotation=0, fontsize=10)
+    
+    # Colorbar font size
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=9)
     
     plt.tight_layout()
     if save_path:

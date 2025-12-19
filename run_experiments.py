@@ -93,7 +93,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU id to use (default: 0)')
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--dataset_path', type=str, default='./scalogram/')
     
     args = parser.parse_args()
