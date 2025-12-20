@@ -110,6 +110,11 @@ if __name__ == '__main__':
                         help=f'Epochs with frozen backbone (default: {DEFAULT_FREEZE_EPOCHS})')
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--dataset_path', type=str, default='./scalogram/')
+    parser.add_argument('--eval_mode', type=str, default='episode',
+                        choices=['standard', 'episode'],
+                        help='Evaluation mode for test (default: episode for fair comparison with few-shot)')
+    parser.add_argument('--episode_num_test', type=int, default=100,
+                        help='Number of test episodes (default: 100)')
     
     args = parser.parse_args()
     
@@ -125,5 +130,7 @@ if __name__ == '__main__':
         num_epochs=args.num_epochs,
         freeze_epochs=args.freeze_epochs,
         batch_size=args.batch_size,
-        dataset_path=args.dataset_path
+        dataset_path=args.dataset_path,
+        eval_mode=args.eval_mode,
+        episode_num_test=args.episode_num_test
     )
