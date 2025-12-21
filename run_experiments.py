@@ -5,6 +5,12 @@ Trains all 6 models with pretrained weights using proper transfer learning:
   - Phase 2: Fine-tune entire network with discriminative LR (80 epochs)
   
 Training samples: 18, 60, and all.
+
+Evaluation modes:
+  - Standard: Traditional batch evaluation on test set
+  - Episode: Episode-based evaluation (for fair comparison with few-shot)
+  - Episodic Fine-tuning: Partial fine-tuning baseline (freeze early backbone, 
+                          fine-tune last block + classifier per episode)
 """
 import subprocess
 import sys
@@ -12,15 +18,36 @@ from itertools import product
 
 # All available models (sorted by size)
 MODELS = [
+    # Small models (< 5M params)
     'squeezenet1_1',      # 1.2M
     'shufflenetv2_x0_5',  # 1.4M
+    'shufflenetv2_x1_0',  # 2.3M
     'mobilenetv3_small',  # 2.5M
+    
+    # Medium models (5M - 15M params)
     'efficientnet_b0',    # 5.3M
+    'mobilenetv3_large',  # 5.5M
+    'efficientnet_b1',    # 7.8M
     'densenet121',        # 8M
+    'efficientnet_b2',    # 9.2M
     'resnet18',           # 11.7M
+    'efficientnet_b3',    # 12M
+    'densenet169',        # 14M
+    
+    # Large models (15M - 50M params)
+    'densenet201',        # 20M
+    'resnet34',           # 21.8M
+    'resnet50',           # 25.6M
+    'inception_v3',       # 27.2M (benchmark)
+    'resnet101',          # 44.5M
+    
+    # Very large models (> 100M params) - Classic benchmarks
+    'vgg16_bn',           # 138M
+    'vgg19_bn',           # 144M
 ]
 
 # Training sample configurations (None = all samples)
+# These define how many samples are used for TRANSFER LEARNING training
 TRAINING_SAMPLES = [18, 60, None]
 
 # Transfer learning settings (unified for fair comparison)
@@ -30,7 +57,15 @@ DEFAULT_NUM_EPOCHS = 100
 
 def run_experiment(model: str, training_samples: int = None, gpu: int = 0, 
                    freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, **kwargs):
-    """Run a single experiment with pretrained weights and transfer learning."""
+    """Run a single experiment with pretrained weights and transfer learning.
+    
+    Args:
+        model: Model architecture name
+        training_samples: Number of training samples (18, 60, or None for all)
+        gpu: GPU id
+        freeze_epochs: Epochs with frozen backbone
+        **kwargs: Additional arguments passed to main.py
+    """
     cmd = [
         sys.executable, 'main.py',
         '--model', model,
@@ -45,13 +80,19 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
     
     # Add any additional kwargs
     for key, value in kwargs.items():
-        cmd.extend([f'--{key}', str(value)])
+        if isinstance(value, bool):
+            if value:
+                cmd.append(f'--{key}')
+        else:
+            cmd.extend([f'--{key}', str(value)])
     
     samples_str = f'{training_samples}samples' if training_samples else 'all'
     
     print(f'\n{"="*60}')
     print(f'Running: {model} | pretrained | {samples_str}')
     print(f'Transfer Learning: {freeze_epochs} epochs freeze + {kwargs.get("num_epochs", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
+    if kwargs.get('episodic_finetune', False):
+        print(f'Episodic Fine-tuning: {kwargs.get("shot_num", 5)}-shot, {kwargs.get("finetune_steps", 10)} steps')
     print(f'{"="*60}\n')
     
     result = subprocess.run(cmd, check=False)
@@ -63,7 +104,11 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
 
 
 def run_all(models=None, training_samples_list=None, freeze_epochs=DEFAULT_FREEZE_EPOCHS, **kwargs):
-    """Run all experiments with pretrained weights."""
+    """Run all experiments with pretrained weights.
+    
+    Note: training_samples_list controls how many samples are used for 
+    transfer learning training. This is separate from evaluation settings.
+    """
     models = models or MODELS
     training_samples_list = training_samples_list or TRAINING_SAMPLES
     
@@ -82,6 +127,8 @@ def run_all(models=None, training_samples_list=None, freeze_epochs=DEFAULT_FREEZ
     print('SUMMARY')
     print(f'{"="*60}')
     print(f'Transfer Learning: {freeze_epochs} epochs freeze, then fine-tune')
+    if kwargs.get('episodic_finetune', False):
+        print(f'Episodic Fine-tuning Eval: {kwargs.get("shot_num", 5)}-shot, {kwargs.get("finetune_steps", 10)} steps')
     print(f'{"-"*60}')
     
     for model, samples, success in results:
@@ -101,7 +148,7 @@ if __name__ == '__main__':
     parser.add_argument('--models', nargs='+', choices=MODELS, default=None,
                         help='Specific models to run (default: all)')
     parser.add_argument('--samples', nargs='+', type=int, default=None,
-                        help='Training sample sizes (default: 18, 60, all). Use 0 for all samples.')
+                        help='Training sample sizes for transfer learning (default: 18, 60, all). Use 0 for all samples.')
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU id to use (default: 0)')
     parser.add_argument('--num_epochs', type=int, default=DEFAULT_NUM_EPOCHS,
@@ -110,11 +157,25 @@ if __name__ == '__main__':
                         help=f'Epochs with frozen backbone (default: {DEFAULT_FREEZE_EPOCHS})')
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--dataset_path', type=str, default='./scalogram/')
+    
+    # Evaluation modes
     parser.add_argument('--eval_mode', type=str, default='episode',
                         choices=['standard', 'episode'],
-                        help='Evaluation mode for test (default: episode for fair comparison with few-shot)')
+                        help='Primary evaluation mode (default: episode for fair comparison with few-shot)')
     parser.add_argument('--episode_num_test', type=int, default=100,
                         help='Number of test episodes (default: 100)')
+    parser.add_argument('--query_per_class', type=int, default=1,
+                        help='Query samples per class per episode')
+    
+    # Episodic Fine-tuning Baseline
+    parser.add_argument('--episodic_finetune', action='store_true',
+                        help='Enable episodic fine-tuning evaluation (Partial Fine-tuning Baseline)')
+    parser.add_argument('--shot_num', type=int, default=5,
+                        help='Support samples per class per episode (K-shot)')
+    parser.add_argument('--finetune_steps', type=int, default=10,
+                        help='Fine-tuning gradient steps per episode')
+    parser.add_argument('--finetune_lr', type=float, default=1e-3,
+                        help='Learning rate for episodic fine-tuning')
     
     args = parser.parse_args()
     
@@ -132,5 +193,10 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         dataset_path=args.dataset_path,
         eval_mode=args.eval_mode,
-        episode_num_test=args.episode_num_test
+        episode_num_test=args.episode_num_test,
+        query_per_class=args.query_per_class,
+        episodic_finetune=args.episodic_finetune,
+        shot_num=args.shot_num,
+        finetune_steps=args.finetune_steps,
+        finetune_lr=args.finetune_lr
     )

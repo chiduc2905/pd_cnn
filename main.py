@@ -24,7 +24,8 @@ import wandb
 from dataset import load_dataset
 from net.models import (
     get_model, get_available_models, count_parameters,
-    freeze_backbone, unfreeze_backbone, get_classifier_params, get_backbone_params
+    freeze_backbone, unfreeze_backbone, freeze_partial_backbone,
+    get_classifier_params, get_backbone_params
 )
 from function.function import plot_confusion_matrix, plot_tsne
 import matplotlib.pyplot as plt
@@ -103,15 +104,17 @@ def get_args():
                         help='WandB project name')
     
     # Episode-based evaluation (for fair benchmark with few-shot)
-    parser.add_argument('--eval_mode', type=str, default='standard',
+    parser.add_argument('--eval_mode', type=str, default='episode',
                         choices=['standard', 'episode'],
-                        help='Evaluation mode: standard (batch) or episode (few-shot style)')
-    parser.add_argument('--episode_num_val', type=int, default=100,
-                        help='Number of validation episodes (for episode mode)')
-    parser.add_argument('--episode_num_test', type=int, default=100,
-                        help='Number of test episodes (for episode mode)')
-    parser.add_argument('--query_per_class', type=int, default=1,
-                        help='Query samples per class per episode')
+                        help='Evaluation mode: standard (batch) or episode (few-shot style, default)')
+    parser.add_argument('--episode_num_val', type=int, default=200,
+                        help='Number of validation episodes (default: 200)')
+    parser.add_argument('--episode_num_test', type=int, default=300,
+                        help='Number of test episodes (default: 300)')
+    parser.add_argument('--query_per_class', type=int, default=15,
+                        help='Query samples per class per episode (default: 15)')
+    parser.add_argument('--shot_list', type=str, default='1,5',
+                        help='Comma-separated list of shot settings to evaluate (default: 1,5)')
     
     return parser.parse_args()
 
@@ -235,6 +238,185 @@ def evaluate_by_episode(model, X, y, num_episodes, args, device):
     all_features = np.vstack(all_features) if all_features else None
     
     return mean_acc, std_acc, ci95, np.array(all_preds), np.array(all_labels), all_features
+
+
+# =============================================================================
+# K-Shot Episodic Evaluation (inference only, no weight updates)
+# =============================================================================
+
+class EpisodeFewShotGenerator:
+    """Generate K-shot episodes with support + query sets for evaluation.
+    
+    For each episode:
+    - Support set: shot_num samples per class (used to compute prototype/reference)
+    - Query set: query_per_class samples per class (for evaluation)
+    
+    NOTE: This is for inference-only evaluation. No weight updates occur.
+    """
+    
+    def __init__(self, X, y, num_classes, shot_num=5, query_per_class=15, seed=42):
+        """
+        Args:
+            X: Images array (N, C, H, W)
+            y: Labels array (N,)
+            num_classes: Number of classes
+            shot_num: Support samples per class (K-shot)
+            query_per_class: Query samples per class
+            seed: Random seed
+        """
+        self.X = X
+        self.y = y
+        self.num_classes = num_classes
+        self.shot_num = shot_num
+        self.query_per_class = query_per_class
+        self.rng = np.random.default_rng(seed)
+        
+        # Group indices by class
+        self.class_indices = {}
+        for c in range(num_classes):
+            self.class_indices[c] = np.where(y == c)[0]
+            
+    def sample_episode(self):
+        """Sample one episode with support and query sets.
+        
+        Returns:
+            support_X: Support images (num_classes * shot_num, C, H, W)
+            support_y: Support labels (num_classes * shot_num,)
+            query_X: Query images (num_classes * query_per_class, C, H, W)
+            query_y: Query labels (num_classes * query_per_class,)
+        """
+        support_X, support_y = [], []
+        query_X, query_y = [], []
+        
+        for c in range(self.num_classes):
+            # Sample shot_num + query_per_class indices
+            total_needed = self.shot_num + self.query_per_class
+            indices = self.rng.choice(
+                self.class_indices[c], 
+                total_needed, 
+                replace=False
+            )
+            
+            # Split into support and query
+            support_idx = indices[:self.shot_num]
+            query_idx = indices[self.shot_num:]
+            
+            support_X.append(self.X[support_idx])
+            support_y.extend([c] * self.shot_num)
+            query_X.append(self.X[query_idx])
+            query_y.extend([c] * self.query_per_class)
+            
+        return (np.vstack(support_X), np.array(support_y),
+                np.vstack(query_X), np.array(query_y))
+
+
+def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class, 
+                             num_classes, seed, device):
+    """K-shot episodic evaluation (inference only, NO weight updates).
+    
+    For each episode:
+      1. Sample K support samples per class + Q query samples per class
+      2. Classify queries using the trained model (no adaptation)
+      3. Compute per-episode accuracy
+      4. Report mean ± std with 95% CI
+    
+    This is pure inference - the model weights are never updated during evaluation.
+    
+    Args:
+        model: PyTorch model (already trained)
+        X: Images array (N, C, H, W)
+        y: Labels array (N,)
+        num_episodes: Number of episodes to evaluate
+        shot_num: Support samples per class (K-shot)
+        query_per_class: Query samples per class per episode
+        num_classes: Number of classes
+        seed: Random seed
+        device: torch device
+        
+    Returns:
+        mean_acc: Mean accuracy over all episodes
+        std_acc: Standard deviation
+        ci95: 95% confidence interval (1.96 * σ / √N)
+        all_preds: All predictions (for confusion matrix)
+        all_labels: All ground truth labels
+    """
+    model.eval()
+    
+    generator = EpisodeFewShotGenerator(
+        X, y, num_classes, 
+        shot_num=shot_num, 
+        query_per_class=query_per_class, 
+        seed=seed
+    )
+    
+    episode_accs = []
+    all_preds, all_labels = [], []
+    
+    with torch.no_grad():
+        for ep in tqdm(range(num_episodes), desc=f'{shot_num}-shot Evaluation', leave=False):
+            # Sample episode
+            support_X, support_y, query_X, query_y = generator.sample_episode()
+            
+            query_X_tensor = torch.from_numpy(query_X.astype(np.float32)).to(device)
+            query_y_tensor = torch.from_numpy(query_y).long().to(device)
+            
+            # === Inference only: classify queries using the trained model ===
+            outputs = model(query_X_tensor)
+            _, predicted = outputs.max(1)
+            
+            # Per-episode accuracy
+            correct = predicted.eq(query_y_tensor).sum().item()
+            episode_accs.append(correct / len(query_y))
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(query_y)
+    
+    mean_acc = np.mean(episode_accs)
+    std_acc = np.std(episode_accs)
+    ci95 = 1.96 * std_acc / np.sqrt(num_episodes)
+    
+    return mean_acc, std_acc, ci95, np.array(all_preds), np.array(all_labels)
+
+
+def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
+    """Evaluate model with multiple shot settings (e.g., 1-shot and 5-shot).
+    
+    Args:
+        model: PyTorch model
+        X: Images array
+        y: Labels array
+        args: Arguments with shot_list, query_per_class, num_classes, seed
+        device: torch device
+        num_episodes: Number of episodes
+        phase: 'val' or 'test' (for logging)
+        
+    Returns:
+        results: Dict mapping shot_num -> (mean_acc, std_acc, ci95, preds, labels)
+    """
+    shot_list = [int(s) for s in args.shot_list.split(',')]
+    results = {}
+    
+    print(f'\n{"="*60}')
+    print(f'{phase.upper()} Episodic Evaluation ({num_episodes} episodes)')
+    print(f'Shot settings: {shot_list}')
+    print(f'Query per class: {args.query_per_class}')
+    print(f'{"="*60}')
+    
+    for shot_num in shot_list:
+        mean_acc, std_acc, ci95, preds, labels = evaluate_episodic_kshot(
+            model, X, y, num_episodes, 
+            shot_num=shot_num,
+            query_per_class=args.query_per_class,
+            num_classes=args.num_classes,
+            seed=args.seed,
+            device=device
+        )
+        
+        results[shot_num] = (mean_acc, std_acc, ci95, preds, labels)
+        
+        print(f'  {shot_num}-shot: {mean_acc*100:.2f} ± {std_acc*100:.2f}% (95% CI: ±{ci95*100:.2f}%)')
+    
+    return results
 
 
 # =============================================================================
@@ -651,7 +833,7 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
     
     Supports two modes:
     - standard: Run through entire test set once
-    - episode: Sample random episodes (for fair benchmark with few-shot)
+    - episode: Multi-shot episodic evaluation (1-shot and 5-shot, 300 episodes each)
     
     Args:
         model: PyTorch model
@@ -667,77 +849,73 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
     samples_str = f'_{args.training_samples}samples' if args.training_samples else '_allsamples'
     
     if args.eval_mode == 'episode' and test_X is not None:
-        # Episode-based evaluation
-        print(f'\n{"="*60}')
-        print(f'Episode-Based Test ({args.episode_num_test} episodes)')
-        print(f'Query per class: {args.query_per_class}')
-        print(f'{"="*60}\n')
-        
-        mean_acc, std_acc, ci95, all_preds, all_labels, all_features = evaluate_by_episode(
-            model, test_X, test_y, args.episode_num_test, args, device
+        # Multi-shot episodic evaluation (1-shot and 5-shot)
+        results = evaluate_multishot(
+            model, test_X, test_y, args, device, 
+            num_episodes=args.episode_num_test, 
+            phase='test'
         )
         
-        test_acc = mean_acc
-        n_predictions = len(all_labels)
+        shot_list = [int(s) for s in args.shot_list.split(',')]
         
-        # Metrics
-        prec, rec, f1, _ = precision_recall_fscore_support(
-            all_labels, all_preds, 
-            labels=list(range(args.num_classes)),
-            average='macro', 
-            zero_division=0
-        )
-        p_val = calculate_p_value(test_acc, 1.0/args.num_classes, n_predictions)
+        # Log results for each shot setting
+        for shot_num in shot_list:
+            mean_acc, std_acc, ci95, all_preds, all_labels = results[shot_num]
+            
+            # Metrics
+            prec, rec, f1, _ = precision_recall_fscore_support(
+                all_labels, all_preds, 
+                labels=list(range(args.num_classes)),
+                average='macro', 
+                zero_division=0
+            )
+            p_val = calculate_p_value(mean_acc, 1.0/args.num_classes, len(all_labels))
+            
+            # Log to WandB
+            wandb.log({
+                f'test_{shot_num}shot_accuracy': mean_acc,
+                f'test_{shot_num}shot_accuracy_std': std_acc,
+                f'test_{shot_num}shot_accuracy_ci95': ci95,
+                f'test_{shot_num}shot_precision': prec,
+                f'test_{shot_num}shot_recall': rec,
+                f'test_{shot_num}shot_f1': f1,
+            })
+            
+            # Update summary
+            wandb.run.summary[f'{shot_num}shot_accuracy'] = mean_acc
+            wandb.run.summary[f'{shot_num}shot_accuracy_std'] = std_acc
+            wandb.run.summary[f'{shot_num}shot_accuracy_ci95'] = ci95
+            
+            # Save results to text file
+            txt_path = os.path.join(args.path_results,
+                                    f'results_{args.model}_{pretrained_str}{samples_str}_{shot_num}shot.txt')
+            with open(txt_path, 'w') as f:
+                f.write(f'Model: {args.model}\n')
+                f.write(f'Pretrained: {args.pretrained}\n')
+                f.write(f'Training Samples: {args.training_samples if args.training_samples else "All"}\n')
+                f.write(f'Eval Mode: {shot_num}-shot episodic\n')
+                f.write(f'Episodes: {args.episode_num_test}\n')
+                f.write(f'Query per class: {args.query_per_class}\n')
+                f.write('-' * 30 + '\n')
+                f.write(f'Accuracy : {mean_acc*100:.2f} ± {std_acc*100:.2f}%\n')
+                f.write(f'95% CI   : ±{ci95*100:.2f}%\n')
+                f.write(f'Precision: {prec:.4f}\n')
+                f.write(f'Recall   : {rec:.4f}\n')
+                f.write(f'F1-Score : {f1:.4f}\n')
+                f.write(f'p-value  : {p_val:.2e}\n')
+            
+            # Confusion Matrix
+            cm_path = os.path.join(args.path_results, 
+                                   f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}_{shot_num}shot.png')
+            plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_path)
+            wandb.log({f'{shot_num}shot_confusion_matrix': wandb.Image(cm_path)})
         
-        print(f'\n{"="*50}')
-        print(f'Episode Test Results: {args.model} | {pretrained_str}{samples_str}')
-        print(f'{"="*50}')
-        print(f'Accuracy : {test_acc*100:.2f} ± {std_acc*100:.2f}% (95% CI: ±{ci95*100:.2f}%)')
-        print(f'Precision: {prec:.4f}')
-        print(f'Recall   : {rec:.4f}')
-        print(f'F1-Score : {f1:.4f}')
-        print(f'p-value  : {p_val:.2e}')
-        print(f'Total predictions: {n_predictions} ({args.episode_num_test} episodes × {args.num_classes} classes)')
-        
-        # Log to WandB
-        wandb.log({
-            'test_accuracy': test_acc,
-            'test_accuracy_std': std_acc,
-            'test_accuracy_ci95': ci95,
-            'test_precision': prec,
-            'test_recall': rec,
-            'test_f1': f1,
-            'test_p_value': p_val,
-            'eval_mode': 'episode',
-            'num_episodes': args.episode_num_test
-        })
-        
-        # Update summary
+        # Use 5-shot as primary metric if available, else use first shot
+        primary_shot = 5 if 5 in shot_list else shot_list[0]
+        test_acc = results[primary_shot][0]
         wandb.run.summary['accuracy'] = test_acc
-        wandb.run.summary['accuracy_std'] = std_acc
-        wandb.run.summary['accuracy_ci95'] = ci95
-        wandb.run.summary['precision'] = prec
-        wandb.run.summary['recall'] = rec
-        wandb.run.summary['f1_score'] = f1
-        wandb.run.summary['p_value'] = p_val
         wandb.run.summary['eval_mode'] = 'episode'
-        
-        # Save results to text file
-        txt_path = os.path.join(args.path_results,
-                                f'results_{args.model}_{pretrained_str}{samples_str}_episode.txt')
-        with open(txt_path, 'w') as f:
-            f.write(f'Model: {args.model}\n')
-            f.write(f'Pretrained: {args.pretrained}\n')
-            f.write(f'Training Samples: {args.training_samples if args.training_samples else "All"}\n')
-            f.write(f'Eval Mode: episode\n')
-            f.write(f'Episodes: {args.episode_num_test}\n')
-            f.write('-' * 30 + '\n')
-            f.write(f'Accuracy : {test_acc*100:.2f} ± {std_acc*100:.2f}%\n')
-            f.write(f'95% CI   : ±{ci95*100:.2f}%\n')
-            f.write(f'Precision: {prec:.4f}\n')
-            f.write(f'Recall   : {rec:.4f}\n')
-            f.write(f'F1-Score : {f1:.4f}\n')
-            f.write(f'p-value  : {p_val:.2e}\n')
+        wandb.run.summary['shot_settings'] = args.shot_list
         
     else:
         # Standard batch evaluation
@@ -796,20 +974,19 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
             f.write(f'Recall   : {rec:.4f}\n')
             f.write(f'F1-Score : {f1:.4f}\n')
             f.write(f'p-value  : {p_val:.2e}\n')
-    
-    # Confusion Matrix (for both modes)
-    cm_suffix = '_episode' if args.eval_mode == 'episode' else ''
-    cm_path = os.path.join(args.path_results, 
-                           f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}{cm_suffix}.png')
-    plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_path)
-    wandb.log({'confusion_matrix': wandb.Image(cm_path)})
-    
-    # t-SNE
-    if all_features is not None and len(all_features) > 0:
-        tsne_path = os.path.join(args.path_results,
-                                 f'tsne_{args.model}_{pretrained_str}{samples_str}{cm_suffix}.png')
-        plot_tsne(all_features, all_labels, args.num_classes, tsne_path)
-        wandb.log({'tsne_plot': wandb.Image(tsne_path)})
+        
+        # Confusion Matrix
+        cm_path = os.path.join(args.path_results, 
+                               f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}.png')
+        plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_path)
+        wandb.log({'confusion_matrix': wandb.Image(cm_path)})
+        
+        # t-SNE
+        if all_features is not None and len(all_features) > 0:
+            tsne_path = os.path.join(args.path_results,
+                                     f'tsne_{args.model}_{pretrained_str}{samples_str}.png')
+            plot_tsne(all_features, all_labels, args.num_classes, tsne_path)
+            wandb.log({'tsne_plot': wandb.Image(tsne_path)})
     
     print(f'\nResults saved to {args.path_results}')
     
