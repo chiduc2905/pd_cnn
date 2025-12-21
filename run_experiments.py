@@ -162,20 +162,18 @@ if __name__ == '__main__':
     parser.add_argument('--eval_mode', type=str, default='episode',
                         choices=['standard', 'episode'],
                         help='Primary evaluation mode (default: episode for fair comparison with few-shot)')
-    parser.add_argument('--episode_num_test', type=int, default=100,
-                        help='Number of test episodes (default: 100)')
-    parser.add_argument('--query_per_class', type=int, default=1,
-                        help='Query samples per class per episode')
+    parser.add_argument('--episode_num_val', type=int, default=200,
+                        help='Number of validation episodes (default: 200)')
+    parser.add_argument('--episode_num_test', type=int, default=300,
+                        help='Number of test episodes (default: 300)')
+    parser.add_argument('--query_per_class', type=int, default=15,
+                        help='Query samples per class per episode (default: 15)')
+    parser.add_argument('--shot_list', type=str, default='1,5',
+                        help='Shot settings to evaluate (default: 1,5)')
     
-    # Episodic Fine-tuning Baseline
-    parser.add_argument('--episodic_finetune', action='store_true',
-                        help='Enable episodic fine-tuning evaluation (Partial Fine-tuning Baseline)')
-    parser.add_argument('--shot_num', type=int, default=5,
-                        help='Support samples per class per episode (K-shot)')
-    parser.add_argument('--finetune_steps', type=int, default=10,
-                        help='Fine-tuning gradient steps per episode')
-    parser.add_argument('--finetune_lr', type=float, default=1e-3,
-                        help='Learning rate for episodic fine-tuning')
+    # WandB
+    parser.add_argument('--project', type=str, default='pd_cnn',
+                        help='WandB project name (default: pd_cnn)')
     
     args = parser.parse_args()
     
@@ -193,10 +191,9 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         dataset_path=args.dataset_path,
         eval_mode=args.eval_mode,
+        episode_num_val=args.episode_num_val,
         episode_num_test=args.episode_num_test,
         query_per_class=args.query_per_class,
-        episodic_finetune=args.episodic_finetune,
-        shot_num=args.shot_num,
-        finetune_steps=args.finetune_steps,
-        finetune_lr=args.finetune_lr
+        shot_list=args.shot_list,
+        project=args.project
     )
