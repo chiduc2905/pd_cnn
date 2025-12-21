@@ -111,8 +111,8 @@ def get_args():
                         help='Number of validation episodes (default: 200)')
     parser.add_argument('--episode_num_test', type=int, default=300,
                         help='Number of test episodes (default: 300)')
-    parser.add_argument('--query_per_class', type=int, default=15,
-                        help='Query samples per class per episode (default: 15)')
+    parser.add_argument('--query_per_class', type=int, default=1,
+                        help='Query samples per class per episode (default: 1)')
     parser.add_argument('--shot_list', type=str, default='1,5',
                         help='Comma-separated list of shot settings to evaluate (default: 1,5)')
     
