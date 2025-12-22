@@ -61,9 +61,6 @@ DATASET_CONFIGS = {
     },
 }
 
-# Default training sample configurations (None = all samples)
-# These define how many samples are used for TRANSFER LEARNING training
-TRAINING_SAMPLES = [18, 60, None]
 
 # Transfer learning settings (unified for fair comparison)
 DEFAULT_FREEZE_EPOCHS = 20
@@ -146,49 +143,6 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         print(f'WARNING: Experiment #{experiment_id} {model} ({samples_str}) failed with code {result.returncode}')
         return False
     return True
-
-
-def run_all(models=None, training_samples_list=None, freeze_epochs=DEFAULT_FREEZE_EPOCHS, 
-            dataset_path=None, **kwargs):
-    """Run all experiments with pretrained weights.
-    
-    Note: training_samples_list controls how many samples are used for 
-    transfer learning training. This is separate from evaluation settings.
-    """
-    models = models or MODELS
-    training_samples_list = training_samples_list or TRAINING_SAMPLES
-    
-    results = []
-    total_experiments = len(models) * len(training_samples_list)
-    experiment_id = 0  # Experiment counter starting from 1
-    
-    for model, samples in product(models, training_samples_list):
-        experiment_id += 1
-        print(f'\n[{experiment_id}/{total_experiments}] Starting experiment #{experiment_id}...')
-        success = run_experiment(model, samples, freeze_epochs=freeze_epochs, 
-                                 experiment_id=experiment_id, dataset_path=dataset_path, **kwargs)
-        results.append((experiment_id, model, samples, success))
-    
-    # Summary
-    print(f'\n{"="*60}')
-    print('SUMMARY')
-    print(f'{"="*60}')
-    if dataset_path:
-        print(f'Dataset: {dataset_path}')
-    print(f'Transfer Learning: {freeze_epochs} epochs freeze, then fine-tune')
-    if kwargs.get('episodic_finetune', False):
-        print(f'Episodic Fine-tuning Eval: {kwargs.get("shot_num", 5)}-shot, {kwargs.get("finetune_steps", 10)} steps')
-    print(f'{"-"*60}')
-    
-    for exp_id, model, samples, success in results:
-        samples_str = f'{samples}' if samples else 'all'
-        status = '✓' if success else '✗'
-        print(f'{status} Exp#{exp_id:03d} {model:20s} | pretrained | {samples_str:>4s} samples')
-    
-    total = len(results)
-    passed = sum(1 for _, _, _, s in results if s)
-    print(f'\nTotal: {passed}/{total} passed')
-    return results
 
 
 def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EPOCHS, **kwargs):
@@ -287,11 +241,22 @@ def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EP
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Run all CNN experiments (pretrained with transfer learning)')
+    parser = argparse.ArgumentParser(
+        description='Run all CNN experiments on original and augmented datasets',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Datasets:
+  - original:  {} (samples: {})
+  - augmented: {} (samples: {})
+        """.format(
+            DATASET_CONFIGS['original']['path'],
+            [s if s else 'all' for s in DATASET_CONFIGS['original']['samples']],
+            DATASET_CONFIGS['augmented']['path'],
+            [s if s else 'all' for s in DATASET_CONFIGS['augmented']['samples']],
+        )
+    )
     parser.add_argument('--models', nargs='+', choices=MODELS, default=None,
                         help='Specific models to run (default: all)')
-    parser.add_argument('--samples', nargs='+', type=int, default=None,
-                        help='Training sample sizes for transfer learning (default: 18, 60, all). Use 0 for all samples.')
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU id to use (default: 0)')
     parser.add_argument('--num_epochs', type=int, default=DEFAULT_NUM_EPOCHS,
@@ -301,13 +266,9 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=16)
     
     # Dataset configuration
-    parser.add_argument('--dataset_path', type=str, default=None,
-                        help='Custom dataset path (overrides --datasets if specified)')
     parser.add_argument('--datasets', nargs='+', choices=list(DATASET_CONFIGS.keys()),
-                        default=None,
+                        default=list(DATASET_CONFIGS.keys()),
                         help=f'Datasets to run: {list(DATASET_CONFIGS.keys())} (default: both)')
-    parser.add_argument('--run_all_datasets', action='store_true',
-                        help='Run experiments on all configured datasets (original + augmented)')
     
     # Evaluation modes
     parser.add_argument('--eval_mode', type=str, default='episode',
@@ -328,8 +289,22 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
-    # Common kwargs for experiments
-    common_kwargs = dict(
+    # Print configuration
+    print(f'\n{"="*80}')
+    print('PD CNN EXPERIMENTS')
+    print(f'{"="*80}')
+    print(f'Datasets: {args.datasets}')
+    for ds in args.datasets:
+        cfg = DATASET_CONFIGS[ds]
+        print(f'  - {ds}: {cfg["path"]}')
+        print(f'    Training samples: {[s if s else "all" for s in cfg["samples"]]}')
+    print(f'{"="*80}\n')
+    
+    # Run experiments
+    run_all_datasets(
+        models=args.models,
+        datasets=args.datasets,
+        freeze_epochs=args.freeze_epochs,
         gpu=args.gpu,
         num_epochs=args.num_epochs,
         batch_size=args.batch_size,
@@ -340,43 +315,3 @@ if __name__ == '__main__':
         shot_list=args.shot_list,
         project=args.project
     )
-    
-    # Determine which mode to use
-    if args.run_all_datasets or args.datasets:
-        # Use the new run_all_datasets function
-        datasets_to_run = args.datasets if args.datasets else list(DATASET_CONFIGS.keys())
-        
-        print(f'\n*** MULTI-DATASET MODE ***')
-        print(f'Datasets: {datasets_to_run}')
-        for ds in datasets_to_run:
-            if ds in DATASET_CONFIGS:
-                cfg = DATASET_CONFIGS[ds]
-                print(f'  - {ds}: {cfg["path"]}')
-                print(f'    Training samples: {[s if s else "all" for s in cfg["samples"]]}')
-        
-        run_all_datasets(
-            models=args.models,
-            datasets=datasets_to_run,
-            freeze_epochs=args.freeze_epochs,
-            **common_kwargs
-        )
-    else:
-        # Legacy single-dataset mode
-        # Process samples argument (0 means None/all)
-        training_samples = None
-        if args.samples:
-            training_samples = [s if s != 0 else None for s in args.samples]
-        
-        dataset_path = args.dataset_path if args.dataset_path else './scalogram/'
-        
-        print(f'\n*** SINGLE-DATASET MODE ***')
-        print(f'Dataset path: {dataset_path}')
-        print(f'Training samples: {training_samples if training_samples else TRAINING_SAMPLES}')
-        
-        run_all(
-            models=args.models,
-            training_samples_list=training_samples,
-            freeze_epochs=args.freeze_epochs,
-            dataset_path=dataset_path,
-            **common_kwargs
-        )
