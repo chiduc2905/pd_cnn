@@ -54,6 +54,30 @@ TRAINING_SAMPLES = [18, 60, None]
 DEFAULT_FREEZE_EPOCHS = 20
 DEFAULT_NUM_EPOCHS = 100
 
+# Per-model input sizes (must match ImageNet pretrained expectations)
+# InceptionV3 requires 299x299 minimum, others use 224 or higher
+MODEL_INPUT_SIZE = {
+    'squeezenet1_1': 224,
+    'shufflenetv2_x0_5': 224,
+    'shufflenetv2_x1_0': 224,
+    'mobilenetv3_small': 224,
+    'efficientnet_b0': 224,
+    'mobilenetv3_large': 224,
+    'efficientnet_b1': 240,
+    'densenet121': 224,
+    'efficientnet_b2': 260,
+    'resnet18': 224,
+    'efficientnet_b3': 300,
+    'densenet169': 224,
+    'densenet201': 224,
+    'resnet34': 224,
+    'resnet50': 224,
+    'inception_v3': 299,  # CRITICAL: InceptionV3 requires 299x299 minimum
+    'resnet101': 224,
+    'vgg16_bn': 224,
+    'vgg19_bn': 224,
+}
+
 
 def run_experiment(model: str, training_samples: int = None, gpu: int = 0, 
                    freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, **kwargs):
@@ -66,6 +90,9 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         freeze_epochs: Epochs with frozen backbone
         **kwargs: Additional arguments passed to main.py
     """
+    # Get model-specific input size (critical for InceptionV3)
+    image_size = MODEL_INPUT_SIZE.get(model, 224)
+    
     cmd = [
         sys.executable, 'main.py',
         '--model', model,
@@ -73,6 +100,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         '--gpu', str(gpu),
         '--pretrained',  # Always use pretrained
         '--freeze_epochs', str(freeze_epochs),
+        '--image_size', str(image_size),  # Use model-specific input size
     ]
     
     if training_samples is not None:

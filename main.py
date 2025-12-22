@@ -424,11 +424,17 @@ def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
 # =============================================================================
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
-    """Train for one epoch."""
+    """Train for one epoch.
+    
+    Handles InceptionV3 special case: returns (output, aux_output) tuple during training.
+    """
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
+    
+    # Check if this is InceptionV3 with aux_logits enabled
+    is_inception = hasattr(model, 'AuxLogits') and hasattr(model, 'aux_logits') and model.aux_logits
     
     pbar = tqdm(loader, desc='Training', leave=False)
     for images, labels in pbar:
@@ -436,7 +442,18 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
         
         optimizer.zero_grad()
         outputs = model(images)
-        loss = criterion(outputs, labels)
+        
+        # Handle InceptionV3 tuple output (main, aux)
+        if is_inception and isinstance(outputs, tuple):
+            main_output, aux_output = outputs
+            loss1 = criterion(main_output, labels)
+            loss2 = criterion(aux_output, labels)
+            # Standard weighting: 1.0 * main + 0.4 * aux (as per original InceptionV3 paper)
+            loss = loss1 + 0.4 * loss2
+            outputs = main_output  # Use main output for accuracy
+        else:
+            loss = criterion(outputs, labels)
+        
         loss.backward()
         optimizer.step()
         
