@@ -116,6 +116,10 @@ def get_args():
     parser.add_argument('--shot_list', type=str, default='1,5',
                         help='Comma-separated list of shot settings to evaluate (default: 1,5)')
     
+    # Experiment tracking
+    parser.add_argument('--experiment_id', type=int, default=None,
+                        help='Experiment ID for checkpoint naming (set by run_experiments.py)')
+    
     return parser.parse_args()
 
 
@@ -818,19 +822,27 @@ def train(model, train_loader, val_loader, args, device):
 
 
 def _save_checkpoint(model, optimizer, epoch, val_acc, args, phase=1):
-    """Save model checkpoint."""
+    """Save model checkpoint with experiment ID if available."""
     pretrained_str = 'pretrained' if args.pretrained else 'scratch'
-    samples_str = f'_{args.training_samples}samples' if args.training_samples else ''
-    save_path = os.path.join(args.path_weights, 
-                             f'{args.model}_{pretrained_str}{samples_str}_best.pth')
+    samples_str = f'_{args.training_samples}samples' if args.training_samples else '_allsamples'
+    
+    # Include experiment ID in filename if provided
+    if args.experiment_id:
+        filename = f'exp{args.experiment_id:03d}_{args.model}_{pretrained_str}{samples_str}_best.pth'
+    else:
+        filename = f'{args.model}_{pretrained_str}{samples_str}_best.pth'
+    
+    save_path = os.path.join(args.path_weights, filename)
     torch.save({
         'epoch': epoch,
         'phase': phase,
+        'experiment_id': args.experiment_id,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'val_acc': val_acc,
         'args': vars(args)
     }, save_path)
+    print(f'  → Checkpoint saved: {filename}')
 
 
 # =============================================================================
@@ -1212,8 +1224,15 @@ def main():
         
         # Load best model and test
         pretrained_str = 'pretrained' if args.pretrained else 'scratch'
-        samples_str = f'_{args.training_samples}samples' if args.training_samples else ''
-        best_path = os.path.join(args.path_weights, f'{args.model}_{pretrained_str}{samples_str}_best.pth')
+        samples_str = f'_{args.training_samples}samples' if args.training_samples else '_allsamples'
+        
+        # Use experiment_id in filename if provided
+        if args.experiment_id:
+            filename = f'exp{args.experiment_id:03d}_{args.model}_{pretrained_str}{samples_str}_best.pth'
+        else:
+            filename = f'{args.model}_{pretrained_str}{samples_str}_best.pth'
+        
+        best_path = os.path.join(args.path_weights, filename)
         checkpoint = torch.load(best_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         

@@ -80,7 +80,7 @@ MODEL_INPUT_SIZE = {
 
 
 def run_experiment(model: str, training_samples: int = None, gpu: int = 0, 
-                   freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, **kwargs):
+                   freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, experiment_id: int = 1, **kwargs):
     """Run a single experiment with pretrained weights and transfer learning.
     
     Args:
@@ -88,6 +88,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         training_samples: Number of training samples (18, 60, or None for all)
         gpu: GPU id
         freeze_epochs: Epochs with frozen backbone
+        experiment_id: Unique experiment number for checkpoint naming
         **kwargs: Additional arguments passed to main.py
     """
     # Get model-specific input size (critical for InceptionV3)
@@ -101,6 +102,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         '--pretrained',  # Always use pretrained
         '--freeze_epochs', str(freeze_epochs),
         '--image_size', str(image_size),  # Use model-specific input size
+        '--experiment_id', str(experiment_id),  # Pass experiment ID for checkpoint naming
     ]
     
     if training_samples is not None:
@@ -117,7 +119,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
     samples_str = f'{training_samples}samples' if training_samples else 'all'
     
     print(f'\n{"="*60}')
-    print(f'Running: {model} | pretrained | {samples_str}')
+    print(f'Experiment #{experiment_id}: {model} | pretrained | {samples_str}')
     print(f'Transfer Learning: {freeze_epochs} epochs freeze + {kwargs.get("num_epochs", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
     if kwargs.get('episodic_finetune', False):
         print(f'Episodic Fine-tuning: {kwargs.get("shot_num", 5)}-shot, {kwargs.get("finetune_steps", 10)} steps')
@@ -126,7 +128,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
     result = subprocess.run(cmd, check=False)
     
     if result.returncode != 0:
-        print(f'WARNING: {model} ({samples_str}) failed with code {result.returncode}')
+        print(f'WARNING: Experiment #{experiment_id} {model} ({samples_str}) failed with code {result.returncode}')
         return False
     return True
 
@@ -142,13 +144,14 @@ def run_all(models=None, training_samples_list=None, freeze_epochs=DEFAULT_FREEZ
     
     results = []
     total_experiments = len(models) * len(training_samples_list)
-    current = 0
+    experiment_id = 0  # Experiment counter starting from 1
     
     for model, samples in product(models, training_samples_list):
-        current += 1
-        print(f'\n[{current}/{total_experiments}] Starting experiment...')
-        success = run_experiment(model, samples, freeze_epochs=freeze_epochs, **kwargs)
-        results.append((model, samples, success))
+        experiment_id += 1
+        print(f'\n[{experiment_id}/{total_experiments}] Starting experiment #{experiment_id}...')
+        success = run_experiment(model, samples, freeze_epochs=freeze_epochs, 
+                                 experiment_id=experiment_id, **kwargs)
+        results.append((experiment_id, model, samples, success))
     
     # Summary
     print(f'\n{"="*60}')
@@ -159,13 +162,13 @@ def run_all(models=None, training_samples_list=None, freeze_epochs=DEFAULT_FREEZ
         print(f'Episodic Fine-tuning Eval: {kwargs.get("shot_num", 5)}-shot, {kwargs.get("finetune_steps", 10)} steps')
     print(f'{"-"*60}')
     
-    for model, samples, success in results:
+    for exp_id, model, samples, success in results:
         samples_str = f'{samples}' if samples else 'all'
         status = '✓' if success else '✗'
-        print(f'{status} {model:20s} | pretrained | {samples_str:>4s} samples')
+        print(f'{status} Exp#{exp_id:03d} {model:20s} | pretrained | {samples_str:>4s} samples')
     
     total = len(results)
-    passed = sum(1 for _, _, s in results if s)
+    passed = sum(1 for _, _, _, s in results if s)
     print(f'\nTotal: {passed}/{total} passed')
 
 
