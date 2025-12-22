@@ -934,10 +934,13 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
                 f.write(f'p-value  : {p_val:.2e}\n')
             
             # Confusion Matrix
-            cm_path = os.path.join(args.path_results, 
-                                   f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}_{shot_num}shot.png')
-            plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_path)
-            wandb.log({f'{shot_num}shot_confusion_matrix': wandb.Image(cm_path)})
+            cm_base = os.path.join(args.path_results, 
+                                   f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}_{shot_num}shot')
+            plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_base + '.png')
+            # plot_confusion_matrix saves with _1col.png suffix
+            cm_png = cm_base + '_1col.png'
+            if os.path.exists(cm_png):
+                wandb.log({f'{shot_num}shot_confusion_matrix': wandb.Image(cm_png)})
         
         # Use 5-shot as primary metric if available, else use first shot
         primary_shot = 5 if 5 in shot_list else shot_list[0]
@@ -1005,17 +1008,23 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
             f.write(f'p-value  : {p_val:.2e}\n')
         
         # Confusion Matrix
-        cm_path = os.path.join(args.path_results, 
-                               f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}.png')
-        plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_path)
-        wandb.log({'confusion_matrix': wandb.Image(cm_path)})
+        cm_base = os.path.join(args.path_results, 
+                               f'confusion_matrix_{args.model}_{pretrained_str}{samples_str}')
+        plot_confusion_matrix(all_labels, all_preds, args.num_classes, cm_base + '.png')
+        # plot_confusion_matrix saves with _1col.png suffix
+        cm_png = cm_base + '_1col.png'
+        if os.path.exists(cm_png):
+            wandb.log({'confusion_matrix': wandb.Image(cm_png)})
         
         # t-SNE
         if all_features is not None and len(all_features) > 0:
-            tsne_path = os.path.join(args.path_results,
-                                     f'tsne_{args.model}_{pretrained_str}{samples_str}.png')
-            plot_tsne(all_features, all_labels, args.num_classes, tsne_path)
-            wandb.log({'tsne_plot': wandb.Image(tsne_path)})
+            tsne_base = os.path.join(args.path_results,
+                                     f'tsne_{args.model}_{pretrained_str}{samples_str}')
+            plot_tsne(all_features, all_labels, args.num_classes, tsne_base + '.png')
+            # plot_tsne saves with _1col.png suffix
+            tsne_png = tsne_base + '_1col.png'
+            if os.path.exists(tsne_png):
+                wandb.log({'tsne_plot': wandb.Image(tsne_png)})
     
     print(f'\nResults saved to {args.path_results}')
     
