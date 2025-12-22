@@ -23,7 +23,7 @@ import wandb
 
 from dataset import load_dataset
 from net.models import (
-    get_model, get_available_models, count_parameters,
+    get_model, get_available_models, count_parameters, calculate_flops,
     freeze_backbone, unfreeze_backbone, freeze_partial_backbone,
     get_classifier_params, get_backbone_params
 )
@@ -1184,6 +1184,14 @@ def main():
     print(f'Total parameters: {total_params:,}')
     print(f'Trainable parameters: {trainable_params:,}')
     
+    # Calculate FLOPs
+    flops_info = calculate_flops(
+        model, 
+        input_size=(1, 3, args.image_size, args.image_size),
+        device=str(device)
+    )
+    print(f'FLOPs: {flops_info["flops_str"]} (MACs: {flops_info["macs_str"]})')
+    
     # Initialize WandB
     pretrained_str = 'pretrained' if args.pretrained else 'scratch'
     samples_str = f'_{args.training_samples}samples' if args.training_samples else ''
@@ -1202,6 +1210,13 @@ def main():
     wandb.run.summary['model_name'] = args.model
     wandb.run.summary['pretrained'] = args.pretrained
     wandb.run.summary['training_samples'] = args.training_samples if args.training_samples else 'all'
+    
+    # Log FLOPs to WandB
+    wandb.run.summary['flops'] = flops_info['flops']
+    wandb.run.summary['macs'] = flops_info['macs']
+    wandb.run.summary['flops_gflops'] = flops_info['flops'] / 1e9  # GFLOPs
+    wandb.run.summary['macs_gmacs'] = flops_info['macs'] / 1e9  # GMACs
+    wandb.config.update({'flops': flops_info['flops'], 'macs': flops_info['macs']})
     
     print(f'\n{"="*60}')
     print(f'Model: {args.model}')

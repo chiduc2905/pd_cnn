@@ -17,3 +17,6 @@ tqdm>=4.60.0
 
 # Experiment tracking
 wandb>=0.12.0
+
+# Model analysis
+thop>=0.1.1  # For FLOPs calculation

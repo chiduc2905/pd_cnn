@@ -455,6 +455,81 @@ def count_parameters(model: nn.Module, trainable_only: bool = True) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
+def calculate_flops(model: nn.Module, input_size: tuple = (1, 3, 224, 224), device: str = 'cpu') -> dict:
+    """Calculate FLOPs (MACs) for a model using thop.
+    
+    FLOPs (Floating Point Operations) measure computational complexity.
+    Note: thop actually counts MACs (Multiply-Accumulate operations).
+    FLOPs ≈ 2 × MACs (one multiply + one add per MAC).
+    
+    Args:
+        model: PyTorch model
+        input_size: Input tensor shape (batch, channels, height, width)
+        device: Device to run calculation on
+        
+    Returns:
+        dict with keys:
+            - 'macs': MACs count (raw number)
+            - 'flops': FLOPs count (2 × MACs)
+            - 'macs_str': Human-readable MACs string (e.g., '0.39 GMACs')
+            - 'flops_str': Human-readable FLOPs string (e.g., '0.78 GFLOPs')
+            - 'params': Total parameters
+            - 'params_str': Human-readable params string (e.g., '5.29 M')
+    """
+    try:
+        from thop import profile, clever_format
+    except ImportError:
+        print("Warning: thop not installed. Install with: pip install thop")
+        return {
+            'macs': 0, 'flops': 0,
+            'macs_str': 'N/A', 'flops_str': 'N/A',
+            'params': count_parameters(model, trainable_only=False),
+            'params_str': f'{count_parameters(model, trainable_only=False) / 1e6:.2f} M'
+        }
+    
+    # Create dummy input
+    dummy_input = torch.randn(input_size).to(device)
+    model = model.to(device)
+    
+    # Store training mode and set to eval for consistent results
+    was_training = model.training
+    model.eval()
+    
+    try:
+        # Profile the model
+        macs, params = profile(model, inputs=(dummy_input,), verbose=False)
+        
+        # FLOPs = 2 × MACs (one multiply + one add)
+        flops = 2 * macs
+        
+        # Format for human readability
+        macs_str, params_str = clever_format([macs, params], "%.2f")
+        flops_str = clever_format([flops], "%.2f")[0]
+        
+        result = {
+            'macs': int(macs),
+            'flops': int(flops),
+            'macs_str': macs_str.replace('B', 'G'),  # Use GMACs instead of B
+            'flops_str': flops_str.replace('B', 'G') + 'FLOPs',
+            'params': int(params),
+            'params_str': params_str
+        }
+    except Exception as e:
+        print(f"Warning: FLOPs calculation failed: {e}")
+        result = {
+            'macs': 0, 'flops': 0,
+            'macs_str': 'N/A', 'flops_str': 'N/A',
+            'params': count_parameters(model, trainable_only=False),
+            'params_str': f'{count_parameters(model, trainable_only=False) / 1e6:.2f} M'
+        }
+    finally:
+        # Restore training mode
+        if was_training:
+            model.train()
+    
+    return result
+
+
 if __name__ == '__main__':
     # Quick test
     print("Available models:")
