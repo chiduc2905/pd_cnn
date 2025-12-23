@@ -1306,13 +1306,15 @@ def main():
         
         # Load best model and test
         pretrained_str = 'pretrained' if args.pretrained else 'scratch'
+        # Add finetune mode to checkpoint name for differentiation (must match _save_checkpoint)
+        finetune_str = '_nofinetune' if (args.pretrained and args.no_finetune) else '_finetune' if args.pretrained else ''
         samples_str = f'_{args.training_samples}samples' if args.training_samples else '_allsamples'
         
         # Use experiment_id in filename if provided
         if args.experiment_id:
-            filename = f'exp{args.experiment_id:03d}_{args.model}_{pretrained_str}{samples_str}_best.pth'
+            filename = f'exp{args.experiment_id:03d}_{args.model}_{pretrained_str}{finetune_str}{samples_str}_best.pth'
         else:
-            filename = f'{args.model}_{pretrained_str}{samples_str}_best.pth'
+            filename = f'{args.model}_{pretrained_str}{finetune_str}{samples_str}_best.pth'
         
         best_path = os.path.join(args.path_weights, filename)
         checkpoint = torch.load(best_path)
