@@ -90,9 +90,13 @@ MODEL_INPUT_SIZE = {
     'vgg19_bn': 224,
 }
 
+# Fine-tune modes to run: True = full fine-tune, False = feature extraction only
+FINETUNE_MODES = [True, False]
+
 
 def run_experiment(model: str, training_samples: int = None, gpu: int = 0, 
-                   freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, experiment_id: int = 1, **kwargs):
+                   freeze_epochs: int = DEFAULT_FREEZE_EPOCHS, experiment_id: int = 1,
+                   no_finetune: bool = False, **kwargs):
     """Run a single experiment with pretrained weights and transfer learning.
     
     Args:
@@ -101,6 +105,7 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         gpu: GPU id
         freeze_epochs: Epochs with frozen backbone
         experiment_id: Unique experiment number for checkpoint naming
+        no_finetune: If True, skip Phase 2 fine-tuning (feature extraction only)
         **kwargs: Additional arguments passed to main.py
     """
     # Get model-specific input size (critical for InceptionV3)
@@ -117,6 +122,10 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
         '--experiment_id', str(experiment_id),  # Pass experiment ID for checkpoint naming
     ]
     
+    # Add no_finetune flag if set
+    if no_finetune:
+        cmd.append('--no_finetune')
+    
     if training_samples is not None:
         cmd.extend(['--training_samples', str(training_samples)])
     
@@ -129,10 +138,14 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
             cmd.extend([f'--{key}', str(value)])
     
     samples_str = f'{training_samples}samples' if training_samples else 'all'
+    finetune_str = 'no-finetune' if no_finetune else 'finetune'
     
     print(f'\n{"="*60}')
-    print(f'Experiment #{experiment_id}: {model} | pretrained | {samples_str}')
-    print(f'Transfer Learning: {freeze_epochs} epochs freeze + {kwargs.get("num_epochs", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
+    print(f'Experiment #{experiment_id}: {model} | pretrained | {samples_str} | {finetune_str}')
+    if no_finetune:
+        print(f'Transfer Learning: Feature Extraction Only ({freeze_epochs} epochs, classifier only)')
+    else:
+        print(f'Transfer Learning: {freeze_epochs} epochs freeze + {kwargs.get("num_epochs", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
     if kwargs.get('episodic_finetune', False):
         print(f'Episodic Fine-tuning: {kwargs.get("shot_num", 5)}-shot, {kwargs.get("finetune_steps", 10)} steps')
     print(f'{"="*60}\n')
@@ -140,34 +153,38 @@ def run_experiment(model: str, training_samples: int = None, gpu: int = 0,
     result = subprocess.run(cmd, check=False)
     
     if result.returncode != 0:
-        print(f'WARNING: Experiment #{experiment_id} {model} ({samples_str}) failed with code {result.returncode}')
+        print(f'WARNING: Experiment #{experiment_id} {model} ({samples_str}, {finetune_str}) failed with code {result.returncode}')
         return False
     return True
 
 
-def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EPOCHS, **kwargs):
+def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EPOCHS, 
+                      finetune_modes=None, **kwargs):
     """Run experiments on multiple datasets with their respective training sample configurations.
     
     Args:
         models: List of model names to run (default: all MODELS)
         datasets: List of dataset names from DATASET_CONFIGS (default: ['original', 'augmented'])
         freeze_epochs: Number of epochs to freeze backbone
+        finetune_modes: List of finetune modes [True, False] (default: both)
         **kwargs: Additional arguments passed to run_experiment
     """
     models = models or MODELS
     datasets = datasets or list(DATASET_CONFIGS.keys())
+    finetune_modes = finetune_modes if finetune_modes is not None else FINETUNE_MODES
     
     all_results = {}
     global_experiment_id = 0
     
-    # Calculate total experiments across all datasets
+    # Calculate total experiments across all datasets (now including both finetune modes)
     total_experiments = sum(
-        len(models) * len(DATASET_CONFIGS[ds]['samples']) 
+        len(models) * len(DATASET_CONFIGS[ds]['samples']) * len(finetune_modes)
         for ds in datasets if ds in DATASET_CONFIGS
     )
     
     print(f'\n{"="*80}')
     print(f'RUNNING EXPERIMENTS ON {len(datasets)} DATASET(S)')
+    print(f'Fine-tune modes: {["finetune" if m else "no-finetune" for m in finetune_modes]}')
     print(f'Total experiments: {total_experiments}')
     print(f'{"="*80}')
     
@@ -184,22 +201,26 @@ def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EP
         print(f'DATASET: {dataset_name.upper()}')
         print(f'Path: {dataset_path}')
         print(f'Training samples: {[s if s else "all" for s in training_samples]}')
+        print(f'Fine-tune modes: {["finetune" if m else "no-finetune" for m in finetune_modes]}')
         print(f'{"#"*80}')
         
         results = []
-        num_experiments = len(models) * len(training_samples)
+        num_experiments = len(models) * len(training_samples) * len(finetune_modes)
         
-        for model, samples in product(models, training_samples):
+        # Iterate through models, samples, AND finetune modes
+        for model, samples, do_finetune in product(models, training_samples, finetune_modes):
             global_experiment_id += 1
-            print(f'\n[GLOBAL {global_experiment_id}/{total_experiments}] Starting experiment...')
+            finetune_str = 'finetune' if do_finetune else 'no-finetune'
+            print(f'\n[GLOBAL {global_experiment_id}/{total_experiments}] Starting experiment ({finetune_str})...')
             success = run_experiment(
                 model, samples, 
                 freeze_epochs=freeze_epochs, 
                 experiment_id=global_experiment_id,
                 dataset_path=dataset_path,
+                no_finetune=not do_finetune,  # Invert: do_finetune=True means no_finetune=False
                 **kwargs
             )
-            results.append((global_experiment_id, model, samples, success))
+            results.append((global_experiment_id, model, samples, do_finetune, success))
         
         # Dataset summary
         print(f'\n{"="*60}')
@@ -209,12 +230,13 @@ def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EP
         print(f'Training samples: {[s if s else "all" for s in training_samples]}')
         print(f'{"-"*60}')
         
-        for exp_id, model, samples, success in results:
+        for exp_id, model, samples, do_finetune, success in results:
             samples_str = f'{samples}' if samples else 'all'
+            finetune_str = 'FT' if do_finetune else 'FE'  # FT=Fine-Tune, FE=Feature Extraction
             status = '✓' if success else '✗'
-            print(f'{status} Exp#{exp_id:03d} {model:20s} | {samples_str:>4s} samples')
+            print(f'{status} Exp#{exp_id:03d} {model:20s} | {samples_str:>4s} samples | {finetune_str}')
         
-        passed = sum(1 for _, _, _, s in results if s)
+        passed = sum(1 for _, _, _, _, s in results if s)
         print(f'\nDataset {dataset_name}: {passed}/{len(results)} passed')
         
         all_results[dataset_name] = results
@@ -227,7 +249,7 @@ def run_all_datasets(models=None, datasets=None, freeze_epochs=DEFAULT_FREEZE_EP
     total_passed = 0
     total_run = 0
     for dataset_name, results in all_results.items():
-        passed = sum(1 for _, _, _, s in results if s)
+        passed = sum(1 for _, _, _, _, s in results if s)
         total_passed += passed
         total_run += len(results)
         print(f'{dataset_name:15s}: {passed}/{len(results)} passed')

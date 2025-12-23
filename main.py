@@ -69,6 +69,8 @@ def get_args():
                         help='Learning rate for backbone during Phase 2 (default: 1e-5)')
     parser.add_argument('--lr_classifier_finetune', type=float, default=1e-4,
                         help='Learning rate for classifier during Phase 2 (default: 1e-4)')
+    parser.add_argument('--no_finetune', action='store_true',
+                        help='Feature extraction only - skip Phase 2 fine-tuning (train classifier only)')
     
     # Regularization
     parser.add_argument('--weight_decay', type=float, default=1e-4,
@@ -322,7 +324,7 @@ def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class
       1. Sample K support samples per class + Q query samples per class
       2. Classify queries using the trained model (no adaptation)
       3. Compute per-episode accuracy
-      4. Report mean ± std with 95% CI
+      4. Report mean ± std with 95% CI, worst-case, and inference time
     
     This is pure inference - the model weights are never updated during evaluation.
     
@@ -341,9 +343,14 @@ def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class
         mean_acc: Mean accuracy over all episodes
         std_acc: Standard deviation
         ci95: 95% confidence interval (1.96 * σ / √N)
+        min_acc: Worst-case (minimum) accuracy
+        max_acc: Best accuracy
         all_preds: All predictions (for confusion matrix)
         all_labels: All ground truth labels
+        inference_time: Dict with 'total', 'avg_per_episode', 'avg_per_sample'
     """
+    import time
+    
     model.eval()
     
     generator = EpisodeFewShotGenerator(
@@ -355,6 +362,8 @@ def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class
     
     episode_accs = []
     all_preds, all_labels = [], []
+    episode_times = []
+    total_samples = 0
     
     with torch.no_grad():
         for ep in tqdm(range(num_episodes), desc=f'{shot_num}-shot Evaluation', leave=False):
@@ -364,9 +373,20 @@ def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class
             query_X_tensor = torch.from_numpy(query_X.astype(np.float32)).to(device)
             query_y_tensor = torch.from_numpy(query_y).long().to(device)
             
+            # === Measure inference time ===
+            start_time = time.perf_counter()
+            
             # === Inference only: classify queries using the trained model ===
             outputs = model(query_X_tensor)
             _, predicted = outputs.max(1)
+            
+            # Ensure GPU synchronization for accurate timing
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+            
+            end_time = time.perf_counter()
+            episode_times.append(end_time - start_time)
+            total_samples += len(query_y)
             
             # Per-episode accuracy
             correct = predicted.eq(query_y_tensor).sum().item()
@@ -378,8 +398,22 @@ def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class
     mean_acc = np.mean(episode_accs)
     std_acc = np.std(episode_accs)
     ci95 = 1.96 * std_acc / np.sqrt(num_episodes)
+    min_acc = np.min(episode_accs)  # Worst-case accuracy
+    max_acc = np.max(episode_accs)  # Best accuracy
     
-    return mean_acc, std_acc, ci95, np.array(all_preds), np.array(all_labels)
+    # Inference time statistics
+    total_time = sum(episode_times)
+    avg_time_per_episode = np.mean(episode_times)
+    avg_time_per_sample = total_time / total_samples if total_samples > 0 else 0
+    
+    inference_time = {
+        'total': total_time,
+        'avg_per_episode': avg_time_per_episode,
+        'avg_per_sample': avg_time_per_sample,
+        'total_samples': total_samples
+    }
+    
+    return mean_acc, std_acc, ci95, min_acc, max_acc, np.array(all_preds), np.array(all_labels), inference_time
 
 
 def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
@@ -395,7 +429,7 @@ def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
         phase: 'val' or 'test' (for logging)
         
     Returns:
-        results: Dict mapping shot_num -> (mean_acc, std_acc, ci95, preds, labels)
+        results: Dict mapping shot_num -> (mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time)
     """
     shot_list = [int(s) for s in args.shot_list.split(',')]
     results = {}
@@ -407,7 +441,7 @@ def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
     print(f'{"="*60}')
     
     for shot_num in shot_list:
-        mean_acc, std_acc, ci95, preds, labels = evaluate_episodic_kshot(
+        mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time = evaluate_episodic_kshot(
             model, X, y, num_episodes, 
             shot_num=shot_num,
             query_per_class=args.query_per_class,
@@ -416,9 +450,12 @@ def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
             device=device
         )
         
-        results[shot_num] = (mean_acc, std_acc, ci95, preds, labels)
+        results[shot_num] = (mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time)
         
-        print(f'  {shot_num}-shot: {mean_acc*100:.2f} ± {std_acc*100:.2f}% (95% CI: ±{ci95*100:.2f}%)')
+        print(f'  {shot_num}-shot:')
+        print(f'    Accuracy: {mean_acc*100:.2f} ± {std_acc*100:.2f}% (95% CI: ±{ci95*100:.2f}%)')
+        print(f'    Worst-case: {min_acc*100:.2f}% | Best: {max_acc*100:.2f}%')
+        print(f'    Inference: {inference_time["avg_per_sample"]*1000:.3f} ms/sample')
     
     return results
 
@@ -729,12 +766,14 @@ def train(model, train_loader, val_loader, args, device):
                 break
     
     # =========================================================================
-    # Phase 2: Fine-tuning (Unfrozen Backbone)
+    # Phase 2: Fine-tuning (Unfrozen Backbone) - Skip if no_finetune is set
     # =========================================================================
+    # Skip Phase 2 if no_finetune flag is set (feature extraction only)
+    skip_phase2 = args.pretrained and args.no_finetune
     phase2_epochs = args.num_epochs - args.freeze_epochs if args.pretrained else args.num_epochs
     start_epoch = args.freeze_epochs + 1 if args.pretrained else 1
     
-    if phase2_epochs > 0:
+    if phase2_epochs > 0 and not skip_phase2:
         current_phase = 2
         print(f'\n{"="*60}')
         if args.pretrained:
@@ -824,13 +863,15 @@ def train(model, train_loader, val_loader, args, device):
 def _save_checkpoint(model, optimizer, epoch, val_acc, args, phase=1):
     """Save model checkpoint with experiment ID if available."""
     pretrained_str = 'pretrained' if args.pretrained else 'scratch'
+    # Add finetune mode to checkpoint name for differentiation
+    finetune_str = '_nofinetune' if (args.pretrained and args.no_finetune) else '_finetune' if args.pretrained else ''
     samples_str = f'_{args.training_samples}samples' if args.training_samples else '_allsamples'
     
     # Include experiment ID in filename if provided
     if args.experiment_id:
-        filename = f'exp{args.experiment_id:03d}_{args.model}_{pretrained_str}{samples_str}_best.pth'
+        filename = f'exp{args.experiment_id:03d}_{args.model}_{pretrained_str}{finetune_str}{samples_str}_best.pth'
     else:
-        filename = f'{args.model}_{pretrained_str}{samples_str}_best.pth'
+        filename = f'{args.model}_{pretrained_str}{finetune_str}{samples_str}_best.pth'
     
     save_path = os.path.join(args.path_weights, filename)
     torch.save({
@@ -889,7 +930,7 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
         
         # Log results for each shot setting
         for shot_num in shot_list:
-            mean_acc, std_acc, ci95, all_preds, all_labels = results[shot_num]
+            mean_acc, std_acc, ci95, min_acc, max_acc, all_preds, all_labels, inference_time = results[shot_num]
             
             # Metrics
             prec, rec, f1, _ = precision_recall_fscore_support(
@@ -905,15 +946,22 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
                 f'test_{shot_num}shot_accuracy': mean_acc,
                 f'test_{shot_num}shot_accuracy_std': std_acc,
                 f'test_{shot_num}shot_accuracy_ci95': ci95,
+                f'test_{shot_num}shot_accuracy_min': min_acc,  # Worst-case
+                f'test_{shot_num}shot_accuracy_max': max_acc,  # Best
                 f'test_{shot_num}shot_precision': prec,
                 f'test_{shot_num}shot_recall': rec,
                 f'test_{shot_num}shot_f1': f1,
+                f'test_{shot_num}shot_inference_time_ms': inference_time['avg_per_sample'] * 1000,
+                f'test_{shot_num}shot_inference_total_s': inference_time['total'],
             })
             
             # Update summary
             wandb.run.summary[f'{shot_num}shot_accuracy'] = mean_acc
             wandb.run.summary[f'{shot_num}shot_accuracy_std'] = std_acc
             wandb.run.summary[f'{shot_num}shot_accuracy_ci95'] = ci95
+            wandb.run.summary[f'{shot_num}shot_accuracy_min'] = min_acc
+            wandb.run.summary[f'{shot_num}shot_accuracy_max'] = max_acc
+            wandb.run.summary[f'{shot_num}shot_inference_ms'] = inference_time['avg_per_sample'] * 1000
             
             # Save results to text file
             txt_path = os.path.join(args.path_results,
@@ -926,12 +974,22 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
                 f.write(f'Episodes: {args.episode_num_test}\n')
                 f.write(f'Query per class: {args.query_per_class}\n')
                 f.write('-' * 30 + '\n')
-                f.write(f'Accuracy : {mean_acc*100:.2f} ± {std_acc*100:.2f}%\n')
-                f.write(f'95% CI   : ±{ci95*100:.2f}%\n')
-                f.write(f'Precision: {prec:.4f}\n')
-                f.write(f'Recall   : {rec:.4f}\n')
-                f.write(f'F1-Score : {f1:.4f}\n')
-                f.write(f'p-value  : {p_val:.2e}\n')
+                f.write(f'Mean Accuracy : {mean_acc*100:.2f}%\n')
+                f.write(f'Std Accuracy  : {std_acc*100:.2f}%\n')
+                f.write(f'95% CI        : ±{ci95*100:.2f}%\n')
+                f.write(f'Worst-case    : {min_acc*100:.2f}%\n')
+                f.write(f'Best-case     : {max_acc*100:.2f}%\n')
+                f.write('-' * 30 + '\n')
+                f.write(f'Precision     : {prec:.4f}\n')
+                f.write(f'Recall        : {rec:.4f}\n')
+                f.write(f'F1-Score      : {f1:.4f}\n')
+                f.write(f'p-value       : {p_val:.2e}\n')
+                f.write('-' * 30 + '\n')
+                f.write(f'Inference Time:\n')
+                f.write(f'  Total       : {inference_time["total"]:.3f}s\n')
+                f.write(f'  Per Episode : {inference_time["avg_per_episode"]*1000:.3f}ms\n')
+                f.write(f'  Per Sample  : {inference_time["avg_per_sample"]*1000:.3f}ms\n')
+                f.write(f'  Total Samples: {inference_time["total_samples"]}\n')
             
             # Confusion Matrix
             cm_base = os.path.join(args.path_results, 
