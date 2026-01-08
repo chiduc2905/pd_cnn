@@ -42,7 +42,7 @@ def get_args():
                         help='Specific experiment IDs to test (e.g., 1 2 3)')
     
     # Data
-    parser.add_argument('--dataset_path', type=str, default='./scalogram/')
+    parser.add_argument('--dataset_path', type=str, default='/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_cnn/scalogram_v2_split')
     parser.add_argument('--path_results', type=str, default='results/')
     parser.add_argument('--val_per_class', type=int, default=60)
     parser.add_argument('--test_per_class', type=int, default=60)

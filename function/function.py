@@ -252,12 +252,12 @@ def plot_confusion_matrix(targets, preds, num_classes=3, save_path=None, class_n
         plt.close()
 
 
-def plot_tsne(features, labels, num_classes=3, save_path=None):
+def plot_tsne(features, labels, num_classes=4, save_path=None):
     """
     t-SNE visualization of query features (vector PDF).
     
-    Saves both 1-column (3.5 in) and 2-column (7.16 in) layouts.
-    For 150-episode test: 450 points (150 per class).
+    Saves 2-column (7.16 in) layout.
+    For 150-episode test: 600 points (150 per class).
     """
     import os
     
@@ -288,50 +288,67 @@ def plot_tsne(features, labels, num_classes=3, save_path=None):
     tsne = TSNE(n_components=2, perplexity=perp, random_state=42, init='pca')
     embedded = tsne.fit_transform(features_pca)
     
-    # Rescale to fit within [-50, 50]
-    max_val = np.abs(embedded).max()
-    if max_val > 0:
-        embedded = embedded / max_val * 45  # Scale to max 45 to leave margin
+    # Save in 2-column IEEE layout only
+    width = 7.16  # 2-column: 7.16 inches
+    layout_name = '2col'
     
-    # IEEE layouts: 1-col = 3.5 in, 2-col = 7.16 in
-    layouts = [
-        {'name': '1col', 'width': 3.5, 'marker_size': 40, 'legend_fontsize': 10},
-        {'name': '2col', 'width': 7.16, 'marker_size': 80, 'legend_fontsize': 10}
-    ]
+    fig, ax = plt.subplots(figsize=(width, width))  # Square figure
+    sns.set_style('white')
     
-    for layout in layouts:
-        plt.figure(figsize=(layout['width'], layout['width']))  # Square figure
-        sns.set_style('white')
+    # Class names mapping (updated for 4 classes)
+    class_names = ['Surface', 'Corona', 'NotPD', 'Void']
+    unique_labels = sorted(set(labels))
+    
+    # Custom distinct colors for 4 classes
+    # Corona (orange), Void (purple) - distinct from each other
+    custom_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd']  # blue, orange, green, purple
+    
+    # Plot each class with CIRCLE MARKERS
+    for i, label in enumerate(unique_labels):
+        mask = np.array(labels) == label
+        class_name = class_names[int(label)] if int(label) < len(class_names) else str(label)
+        color = custom_colors[int(label)] if int(label) < len(custom_colors) else '#333333'
         
-        scatter = sns.scatterplot(
-            x=embedded[:, 0], y=embedded[:, 1],
-            hue=labels, palette='bright',
-            s=layout['marker_size'], alpha=0.8, legend='full'
+        # Scatter plot with circle markers and WHITE EDGE
+        ax.scatter(
+            embedded[mask, 0], embedded[mask, 1],
+            c=[color], s=40, alpha=0.85,
+            marker='o',  # Circle marker
+            edgecolors='white', linewidths=0.5,
+            label=class_name
         )
-        
-        sns.despine()
-        plt.legend(title='Class', bbox_to_anchor=(1.05, 1), loc='upper left', 
-                   fontsize=layout['legend_fontsize'], title_fontsize=11)
-        plt.title('t-SNE', fontsize=12, fontweight='bold')
-        plt.xlabel('Dim 1', fontsize=12)
-        plt.ylabel('Dim 2', fontsize=12)
-        plt.xlim(-50, 50)
-        plt.ylim(-50, 50)
-        plt.tick_params(axis='both', which='major', labelsize=12)
-        
-        if save_path:
-            # Generate filenames with layout suffix
-            base, ext = os.path.splitext(save_path)
-            # PDF for publication (vector, doesn't pixelate when zoomed)
-            pdf_path = f"{base}_{layout['name']}.pdf"
-            plt.savefig(pdf_path, format='pdf', bbox_inches='tight')
-            print(f'Saved: {pdf_path}')
-            # PNG for WandB logging
-            png_path = f"{base}_{layout['name']}.png"
-            plt.savefig(png_path, format='png', dpi=300, bbox_inches='tight', facecolor='white')
-            print(f'Saved: {png_path}')
-        
-        plt.close()
+    
+    # Auto-scale axes based on data
+    x_min, x_max = embedded[:, 0].min(), embedded[:, 0].max()
+    y_min, y_max = embedded[:, 1].min(), embedded[:, 1].max()
+    padding = max(x_max - x_min, y_max - y_min) * 0.1
+    ax.set_xlim(x_min - padding, x_max + padding)
+    ax.set_ylim(y_min - padding, y_max + padding)
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    ax.set_aspect('equal')
+    
+    # Light grid
+    ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+    ax.set_axisbelow(True)
+    
+    # Legend
+    ax.legend(loc='upper right', fontsize=9)
+    
+    plt.tight_layout()
+    if save_path:
+        # Remove extension if present
+        base_path = save_path.rsplit('.', 1)[0] if '.' in save_path else save_path
+        # Save as PDF (vector for publication)
+        pdf_path = f"{base_path}_{layout_name}.pdf"
+        plt.savefig(pdf_path, format='pdf', bbox_inches='tight', facecolor='white')
+        print(f'Saved: {pdf_path}')
+        # Save as PNG (for WandB logging)
+        png_path = f"{base_path}_{layout_name}.png"
+        plt.savefig(png_path, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+        print(f'Saved: {png_path}')
+    plt.close()
 
 
 def plot_tsne_comparison(original_features, encoded_features, labels, num_classes=3, save_path=None):

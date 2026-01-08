@@ -51,13 +51,9 @@ MODELS = [
 # Dataset configurations with different training sample settings
 # Format: {dataset_name: {'path': path, 'samples': [sample_sizes]}}
 DATASET_CONFIGS = {
-    'original': {
-        'path': '/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_fewshot/scalogram_original',
-        'samples': [18, 30],  # Original dataset: 18 and 30 training samples only
-    },
-    'augmented': {
-        'path': '/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_fewshot/scalogram_augmented',
-        'samples': [18, 60, None],  # Augmented dataset: 18, 60, and all samples
+    'v2_split': {
+        'path': '/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_cnn/scalogram_v2_split',
+        'samples': [18, 60, None],  # v2 split dataset: 18, 60, and all samples
     },
 }
 
@@ -264,23 +260,20 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Run all CNN experiments on original and augmented datasets',
+        description='Run all CNN experiments on v2_split dataset',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Datasets:
-  - original:  {} (samples: {})
-  - augmented: {} (samples: {})
+  - v2_split: {} (samples: {})
         """.format(
-            DATASET_CONFIGS['original']['path'],
-            [s if s else 'all' for s in DATASET_CONFIGS['original']['samples']],
-            DATASET_CONFIGS['augmented']['path'],
-            [s if s else 'all' for s in DATASET_CONFIGS['augmented']['samples']],
+            DATASET_CONFIGS['v2_split']['path'],
+            [s if s else 'all' for s in DATASET_CONFIGS['v2_split']['samples']],
         )
     )
     parser.add_argument('--models', nargs='+', choices=MODELS, default=None,
                         help='Specific models to run (default: all)')
-    parser.add_argument('--gpu', type=int, default=0,
-                        help='GPU id to use (default: 0)')
+    parser.add_argument('--gpu', type=int, default=1,
+                        help='GPU id to use (default: 1)')
     parser.add_argument('--num_epochs', type=int, default=DEFAULT_NUM_EPOCHS,
                         help=f'Total epochs (default: {DEFAULT_NUM_EPOCHS})')
     parser.add_argument('--freeze_epochs', type=int, default=DEFAULT_FREEZE_EPOCHS,
