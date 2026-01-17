@@ -277,10 +277,19 @@ def plot_confusion_matrix(targets, preds, save_path=None, class_names=None):
     
     plt.tight_layout()
     if save_path:
+        # If save_path is a directory, append default name
+        if os.path.isdir(save_path):
+            save_path = os.path.join(save_path, 'confusion_matrix')
+            
         base = save_path.rsplit('.', 1)[0] if '.' in save_path else save_path
-        plt.savefig(f"{base}_cm.pdf", format='pdf', bbox_inches='tight')
-        plt.savefig(f"{base}_cm.png", format='png', dpi=300, bbox_inches='tight')
-        print(f'Saved: {base}_cm.pdf/png')
+        
+        # Avoid redundant suffixes if they are already in the name
+        final_pdf = f"{base}.pdf"
+        final_png = f"{base}.png"
+        
+        plt.savefig(final_pdf, format='pdf', bbox_inches='tight')
+        plt.savefig(final_png, format='png', dpi=300, bbox_inches='tight')
+        print(f'Saved: {final_pdf}')
     plt.close()
 
 
@@ -333,10 +342,18 @@ def plot_umap(features, labels, save_path=None, class_names=None):
     
     plt.tight_layout()
     if save_path:
+        # If save_path is a directory, append default name
+        if os.path.isdir(save_path):
+            save_path = os.path.join(save_path, 'umap')
+            
         base = save_path.rsplit('.', 1)[0] if '.' in save_path else save_path
-        plt.savefig(f"{base}_umap.pdf", format='pdf', bbox_inches='tight')
-        plt.savefig(f"{base}_umap.png", format='png', dpi=300, bbox_inches='tight')
-        print(f'Saved: {base}_umap.pdf/png')
+        
+        final_pdf = f"{base}.pdf"
+        final_png = f"{base}.png"
+        
+        plt.savefig(final_pdf, format='pdf', bbox_inches='tight')
+        plt.savefig(final_png, format='png', dpi=300, bbox_inches='tight')
+        print(f'Saved: {final_pdf}')
     plt.close()
 
 
