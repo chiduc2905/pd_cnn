@@ -131,6 +131,20 @@ def process_dataset(data_root, classes=None, samples_per_class=None):
     print(f"Dataset root: {data_root}")
     print(f"Classes: {classes}")
     
+    # Debug: show first .mat file keys
+    for class_name in classes:
+        class_dir = os.path.join(data_root, class_name)
+        if os.path.exists(class_dir):
+            mat_files = glob(os.path.join(class_dir, '*.mat'))
+            if mat_files:
+                first_mat = scipy.io.loadmat(mat_files[0])
+                keys = [k for k in first_mat.keys() if not k.startswith('_')]
+                print(f"\n  DEBUG - {class_name} sample keys: {keys}")
+                for k in keys:
+                    if isinstance(first_mat[k], np.ndarray):
+                        print(f"    {k}: shape={first_mat[k].shape}, dtype={first_mat[k].dtype}")
+                break
+    
     all_features = []
     all_labels = []
     
@@ -149,6 +163,7 @@ def process_dataset(data_root, classes=None, samples_per_class=None):
         
         print(f"\n  {class_name}: {len(mat_files)} files")
         
+        success_count = 0
         for mat_file in tqdm(mat_files, desc=f"  Processing {class_name}", leave=False):
             try:
                 voltage, _ = load_mat_file(mat_file)
@@ -156,12 +171,21 @@ def process_dataset(data_root, classes=None, samples_per_class=None):
                 
                 all_features.append(features)
                 all_labels.append(class_idx)
+                success_count += 1
                 
             except Exception as e:
-                print(f"    Error loading {os.path.basename(mat_file)}: {e}")
+                if success_count == 0:  # Only show first error
+                    print(f"    Error loading {os.path.basename(mat_file)}: {e}")
                 continue
+        
+        print(f"    Successfully processed: {success_count}/{len(mat_files)}")
     
-    X = np.array(all_features)
+    if len(all_features) == 0:
+        print("\n*** ERROR: No files were successfully processed! ***")
+        print("Please check the .mat file format and keys above.")
+        return np.array([]).reshape(0, 5), np.array([]), classes
+    
+    X = np.vstack(all_features)  # Ensure 2D array
     y = np.array(all_labels)
     
     print(f"\nTotal samples: {len(y)}")
@@ -205,14 +229,20 @@ def print_feature_stats(X, feature_names=None):
     if feature_names is None:
         feature_names = ['Mean', 'Variance', 'Std', 'Skewness', 'Kurtosis']
     
+    # Check if X is valid 2D array
+    if X.size == 0 or X.ndim != 2:
+        print("\nFeature Statistics: No data to display (array is empty or 1D)")
+        return
+    
     print("\nFeature Statistics:")
     print("-" * 50)
     for i, name in enumerate(feature_names):
-        print(f"  {name}:")
-        print(f"    Min: {X[:, i].min():.6f}")
-        print(f"    Max: {X[:, i].max():.6f}")
-        print(f"    Mean: {X[:, i].mean():.6f}")
-        print(f"    Std: {X[:, i].std():.6f}")
+        if i < X.shape[1]:
+            print(f"  {name}:")
+            print(f"    Min: {X[:, i].min():.6f}")
+            print(f"    Max: {X[:, i].max():.6f}")
+            print(f"    Mean: {X[:, i].mean():.6f}")
+            print(f"    Std: {X[:, i].std():.6f}")
 
 
 # =============================================================================
