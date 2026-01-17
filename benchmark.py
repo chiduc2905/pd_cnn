@@ -837,7 +837,7 @@ if __name__ == '__main__':
                         help='Path to 1D signal dataset (for ML)')
     parser.add_argument('--output_dir', type=str, default='./benchmark_results',
                         help='Output directory for results')
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--device', type=str, default='cuda:1')
     parser.add_argument('--skip_ml', action='store_true', help='Skip ML pipeline')
     parser.add_argument('--skip_cnn', action='store_true', help='Skip CNN pipeline')
     parser.add_argument('--skip_tl', action='store_true', help='Skip Transfer Learning')
