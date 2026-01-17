@@ -405,7 +405,7 @@ def run_cnn_pipeline(X_train, y_train, X_test, y_test, num_classes=3,
     print_metrics("Proposed CNN", metrics)
     
     # Extract features for visualization
-    features = model.get_features(X_test_t).cpu().numpy()
+    features = model.extract_features(X_test_t).cpu().numpy()
     
     return metrics, y_pred, features, model
 
