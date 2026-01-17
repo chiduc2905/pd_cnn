@@ -107,11 +107,21 @@ def load_mat_file(file_path):
 def process_dataset(data_root, classes=None, samples_per_class=None):
     """Process entire dataset and extract features.
     
-    Dataset structure expected:
+    Supports two dataset structures:
+    
+    1. Flat structure:
         data_root/
         ├── class1/*.mat
         ├── class2/*.mat
         └── class3/*.mat
+    
+    2. Split structure (train/val/test):
+        data_root/
+        ├── train/
+        │   ├── class1/*.mat
+        │   └── class2/*.mat
+        ├── val/
+        └── test/
     
     Args:
         data_root: Root directory of dataset
@@ -119,10 +129,102 @@ def process_dataset(data_root, classes=None, samples_per_class=None):
         samples_per_class: Max samples per class. If None, use all.
         
     Returns:
-        X: Feature matrix (N, 5)
-        y: Labels (N,)
+        X: Feature matrix (N, 5) or dict with train/val/test splits
+        y: Labels (N,) or dict with train/val/test splits
         class_names: List of class names
     """
+    # Check if dataset has train/val/test structure
+    splits = ['train', 'val', 'test']
+    has_splits = all(os.path.isdir(os.path.join(data_root, s)) for s in splits)
+    
+    if has_splits:
+        print(f"Dataset root: {data_root}")
+        print(f"Detected train/val/test structure")
+        return process_split_dataset(data_root, classes, samples_per_class)
+    else:
+        return process_flat_dataset(data_root, classes, samples_per_class)
+
+
+def process_split_dataset(data_root, classes=None, samples_per_class=None):
+    """Process dataset with train/val/test splits already defined."""
+    splits = ['train', 'val', 'test']
+    
+    # Auto-detect classes from train folder
+    if classes is None:
+        train_dir = os.path.join(data_root, 'train')
+        classes = sorted([d for d in os.listdir(train_dir) 
+                         if os.path.isdir(os.path.join(train_dir, d))])
+    
+    print(f"Classes: {classes}")
+    
+    # Debug: show first .mat file keys
+    for class_name in classes:
+        class_dir = os.path.join(data_root, 'train', class_name)
+        if os.path.exists(class_dir):
+            mat_files = glob(os.path.join(class_dir, '*.mat'))
+            if mat_files:
+                first_mat = scipy.io.loadmat(mat_files[0])
+                keys = [k for k in first_mat.keys() if not k.startswith('_')]
+                print(f"\n  DEBUG - {class_name} sample keys: {keys}")
+                break
+    
+    X_splits = {}
+    y_splits = {}
+    
+    for split in splits:
+        print(f"\n{'='*40}")
+        print(f"Processing {split.upper()} set")
+        print(f"{'='*40}")
+        
+        all_features = []
+        all_labels = []
+        
+        for class_idx, class_name in enumerate(classes):
+            class_dir = os.path.join(data_root, split, class_name)
+            
+            if not os.path.exists(class_dir):
+                print(f"  Warning: {class_dir} not found, skipping")
+                continue
+            
+            mat_files = sorted(glob(os.path.join(class_dir, '*.mat')))
+            
+            if samples_per_class is not None and len(mat_files) > samples_per_class:
+                np.random.shuffle(mat_files)
+                mat_files = mat_files[:samples_per_class]
+            
+            print(f"  {class_name}: {len(mat_files)} files")
+            
+            success_count = 0
+            for mat_file in tqdm(mat_files, desc=f"    {class_name}", leave=False):
+                try:
+                    voltage, _ = load_mat_file(mat_file)
+                    features = extract_statistical_features(voltage)
+                    
+                    all_features.append(features)
+                    all_labels.append(class_idx)
+                    success_count += 1
+                    
+                except Exception as e:
+                    if success_count == 0:
+                        print(f"      Error: {os.path.basename(mat_file)}: {e}")
+                    continue
+            
+            print(f"    Processed: {success_count}/{len(mat_files)}")
+        
+        if len(all_features) > 0:
+            X_splits[split] = np.vstack(all_features)
+            y_splits[split] = np.array(all_labels)
+            print(f"\n  {split} total: {len(y_splits[split])} samples, shape: {X_splits[split].shape}")
+        else:
+            X_splits[split] = np.array([]).reshape(0, 5)
+            y_splits[split] = np.array([])
+            print(f"\n  {split}: No samples processed!")
+    
+    return X_splits, y_splits, classes
+
+
+def process_flat_dataset(data_root, classes=None, samples_per_class=None):
+    """Process dataset with flat structure (classes directly under root)."""
     # Auto-detect classes if not provided
     if classes is None:
         classes = sorted([d for d in os.listdir(data_root) 
@@ -174,7 +276,7 @@ def process_dataset(data_root, classes=None, samples_per_class=None):
                 success_count += 1
                 
             except Exception as e:
-                if success_count == 0:  # Only show first error
+                if success_count == 0:
                     print(f"    Error loading {os.path.basename(mat_file)}: {e}")
                 continue
         
@@ -182,10 +284,9 @@ def process_dataset(data_root, classes=None, samples_per_class=None):
     
     if len(all_features) == 0:
         print("\n*** ERROR: No files were successfully processed! ***")
-        print("Please check the .mat file format and keys above.")
         return np.array([]).reshape(0, 5), np.array([]), classes
     
-    X = np.vstack(all_features)  # Ensure 2D array
+    X = np.vstack(all_features)
     y = np.array(all_labels)
     
     print(f"\nTotal samples: {len(y)}")
@@ -269,16 +370,32 @@ if __name__ == '__main__':
     print(f"Features: Mean, Variance, Std, Skewness, Kurtosis")
     
     # Process dataset
-    X, y, class_names = process_dataset(
+    result = process_dataset(
         args.data_root,
         samples_per_class=args.samples_per_class
     )
     
-    # Print stats
-    print_feature_stats(X)
-    
-    # Split dataset
-    X_train, y_train, X_val, y_val, X_test, y_test = split_dataset(X, y)
+    # Check if result is split dataset (dict) or flat dataset (arrays)
+    if isinstance(result[0], dict):
+        # Split dataset structure (train/val/test already defined)
+        X_splits, y_splits, class_names = result
+        
+        X_train, y_train = X_splits['train'], y_splits['train']
+        X_val, y_val = X_splits['val'], y_splits['val']
+        X_test, y_test = X_splits['test'], y_splits['test']
+        
+        # Print stats for training set
+        print_feature_stats(X_train)
+        
+    else:
+        # Flat dataset structure - need to split
+        X, y, class_names = result
+        
+        # Print stats
+        print_feature_stats(X)
+        
+        # Split dataset
+        X_train, y_train, X_val, y_val, X_test, y_test = split_dataset(X, y)
     
     print(f"\nDataset split:")
     print(f"  Train: {len(y_train)}")
@@ -293,3 +410,4 @@ if __name__ == '__main__':
              class_names=class_names)
     
     print(f"\nFeatures saved to: {args.output}")
+
