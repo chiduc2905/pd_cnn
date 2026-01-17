@@ -395,17 +395,35 @@ def run_cnn_pipeline(X_train, y_train, X_test, y_test, num_classes=3,
             print(f"  Epoch {epoch+1}/{epochs}")
     
     # Evaluate
+    # Evaluate (with batching to avoid OOM)
     model.eval()
-    X_test_t = torch.FloatTensor(X_test).to(device)
+    
+    # Use DataLoader for test set
+    X_test_t = torch.FloatTensor(X_test)
+    test_dataset = TensorDataset(X_test_t)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    all_preds = []
+    all_features = []
+    
     with torch.no_grad():
-        outputs = model(X_test_t)
-        y_pred = outputs.argmax(dim=1).cpu().numpy()
+        for batch in test_loader:
+            inputs = batch[0].to(device)
+            
+            # Predict
+            outputs = model(inputs)
+            preds = outputs.argmax(dim=1).cpu().numpy()
+            all_preds.extend(preds)
+            
+            # Extract features
+            feats = model.extract_features(inputs).cpu().numpy()
+            all_features.append(feats)
+            
+    y_pred = np.array(all_preds)
+    features = np.vstack(all_features)
     
     metrics = compute_metrics(y_test, y_pred)
     print_metrics("Proposed CNN", metrics)
-    
-    # Extract features for visualization
-    features = model.extract_features(X_test_t).cpu().numpy()
     
     return metrics, y_pred, features, model
 
@@ -425,6 +443,23 @@ def run_transfer_learning_pipeline(X_train, y_train, X_test, y_test,
     print("="*60)
     
     results = {}
+    batch_size = 32
+    
+    # Prepare DataLoaders
+    train_dataset = TensorDataset(torch.FloatTensor(X_train))
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    
+    test_dataset = TensorDataset(torch.FloatTensor(X_test))
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    def get_features(model, loader):
+        feats = []
+        with torch.no_grad():
+            for batch in loader:
+                inputs = batch[0].to(device)
+                f = model(inputs).cpu().numpy()
+                feats.append(f)
+        return np.vstack(feats)
     
     for model_name in model_names:
         print(f"\n--- {model_name.upper()} ---")
@@ -432,12 +467,11 @@ def run_transfer_learning_pipeline(X_train, y_train, X_test, y_test,
             seed_func(SEED)
             extractor = FeatureExtractor(model_name, device=device)
             
-            X_train_t = torch.FloatTensor(X_train).to(device)
-            X_test_t = torch.FloatTensor(X_test).to(device)
-            
-            with torch.no_grad():
-                train_features = extractor(X_train_t).cpu().numpy()
-                test_features = extractor(X_test_t).cpu().numpy()
+            # Extract features in batches
+            print("  Extracting features...")
+            train_features = get_features(extractor, train_loader)
+            test_features = get_features(extractor, test_loader)
+
             
             scaler = StandardScaler()
             train_scaled = scaler.fit_transform(train_features)
