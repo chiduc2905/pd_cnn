@@ -53,7 +53,7 @@ MODELS = [
 DATASET_CONFIGS = {
     'v2_split': {
         'path': '/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_cnn/scalogram_v2_split',
-        'samples': [18, 60, None],  # v2 split dataset: 18, 60, and all samples
+        'samples': [30, 60, 150, None],  # Synced with mamba_glscnet
     },
 }
 
@@ -289,12 +289,12 @@ Datasets:
     parser.add_argument('--eval_mode', type=str, default='episode',
                         choices=['standard', 'episode'],
                         help='Primary evaluation mode (default: episode for fair comparison with few-shot)')
-    parser.add_argument('--episode_num_val', type=int, default=200,
-                        help='Number of validation episodes (default: 200)')
-    parser.add_argument('--episode_num_test', type=int, default=300,
-                        help='Number of test episodes (default: 300)')
-    parser.add_argument('--query_per_class', type=int, default=1,
-                        help='Query samples per class per episode (default: 1)')
+    parser.add_argument('--episode_num_val', type=int, default=150,
+                        help='Number of validation episodes (default: 150)')
+    parser.add_argument('--episode_num_test', type=int, default=150,
+                        help='Number of test episodes (default: 150)')
+    parser.add_argument('--query_per_class', type=int, default=5,
+                        help='Query samples per class per episode (default: 5)')
     parser.add_argument('--shot_list', type=str, default='1,5',
                         help='Shot settings to evaluate (default: 1,5)')
     
