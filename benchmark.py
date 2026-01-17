@@ -680,18 +680,24 @@ class Signal1DDataset:
 
 def run_unified_benchmark(scalogram_path, signal1d_path, samples_per_class, output_dir, 
                           device='cuda', run_ml=True, run_cnn=True, run_tl=True):
-    """Run ALL pipelines in one command."""
+    """Run ALL pipelines in one command with professional folder structure."""
     
     label = f"{samples_per_class}samples" if samples_per_class else "all"
+    
+    # Create experiment directory: output_dir/30samples/
+    exp_dir = os.path.join(output_dir, label)
+    os.makedirs(exp_dir, exist_ok=True)
+    
     print("\n" + "#"*70)
     print(f"# UNIFIED BENCHMARK: {label}")
+    print(f"# saving results to: {exp_dir}")
     print("#"*70)
     
     seed_func(SEED)
     results = {'label': label, 'samples_per_class': samples_per_class}
     
     # =========================================================================
-    # PIPELINE A: ML on 1D Signals (Confusion Matrix only)
+    # PIPELINE A: ML on 1D Signals
     # =========================================================================
     if run_ml and signal1d_path:
         print("\n[PIPELINE A: ML on 1D Signals]")
@@ -700,16 +706,21 @@ def run_unified_benchmark(scalogram_path, signal1d_path, samples_per_class, outp
         if len(dataset_1d.X_train) > 0:
             ml_agg, ml_preds, _ = run_ml_pipeline(
                 dataset_1d.X_train, dataset_1d.y_train,
-                dataset_1d.X_test, dataset_1d.y_test
+                dataset_1d.X_test, dataset_1d.y_test, device=device
             )
             results['ml'] = ml_agg
             results['ml_n_train'] = len(dataset_1d.X_train)
             results['ml_n_test'] = len(dataset_1d.X_test)
             
-            # Confusion matrix for best model (SVM typically best)
-            for model_name in ['SVM', 'RF', 'kNN']:
-                save_prefix = os.path.join(output_dir, f"ml_{model_name}_{label}")
-                plot_confusion_matrix(dataset_1d.y_test, ml_preds[model_name], save_prefix)
+            # Save visualizations in: output_dir/30samples/ML/{model}/
+            ml_dir = os.path.join(exp_dir, 'ML')
+            for model_name in ['ANN', 'SVM', 'RF', 'kNN']:
+                if model_name in ml_preds:
+                    model_dir = os.path.join(ml_dir, model_name)
+                    os.makedirs(model_dir, exist_ok=True)
+                    
+                    save_path = os.path.join(model_dir, 'cm')
+                    plot_confusion_matrix(dataset_1d.y_test, ml_preds[model_name], save_path)
     
     # =========================================================================
     # PIPELINE B & C: CNN and TL on Scalograms
@@ -731,9 +742,12 @@ def run_unified_benchmark(scalogram_path, signal1d_path, samples_per_class, outp
             )
             results['cnn'] = cnn_metrics
             
-            save_prefix = os.path.join(output_dir, f"cnn_{label}")
-            plot_confusion_matrix(dataset_img.y_test, cnn_pred, save_prefix)
-            plot_umap(cnn_features, dataset_img.y_test, save_prefix)
+            # Save in: output_dir/30samples/CNN/ProposedCNN/
+            cnn_dir = os.path.join(exp_dir, 'CNN', 'ProposedCNN')
+            os.makedirs(cnn_dir, exist_ok=True)
+            
+            plot_confusion_matrix(dataset_img.y_test, cnn_pred, os.path.join(cnn_dir, 'cm'))
+            plot_umap(cnn_features, dataset_img.y_test, os.path.join(cnn_dir, 'umap'))
         
         # Transfer Learning Pipeline
         if run_tl:
@@ -743,12 +757,22 @@ def run_unified_benchmark(scalogram_path, signal1d_path, samples_per_class, outp
             )
             results['tl'] = tl_results
             
-            # Visualization for each TL model
+            # Save in: output_dir/30samples/TL/{backbone}/
+            tl_dir = os.path.join(exp_dir, 'TL')
             for model_name, model_results in tl_results.items():
-                save_prefix = os.path.join(output_dir, f"tl_{model_name}_{label}")
+                model_dir = os.path.join(tl_dir, model_name)
+                os.makedirs(model_dir, exist_ok=True)
+                
+                # Save plots for all classifiers (SVM, RF, kNN)
                 plot_confusion_matrix(dataset_img.y_test, model_results['svm_pred'], 
-                                     f"{save_prefix}_svm")
-                plot_umap(model_results['features'], dataset_img.y_test, save_prefix)
+                                     os.path.join(model_dir, 'svm_cm'))
+                plot_confusion_matrix(dataset_img.y_test, model_results['rf_pred'], 
+                                     os.path.join(model_dir, 'rf_cm'))
+                plot_confusion_matrix(dataset_img.y_test, model_results['knn_pred'], 
+                                     os.path.join(model_dir, 'knn_cm'))
+                                     
+                # UMAP is usually based on features, so it's common for all classifiers
+                plot_umap(model_results['features'], dataset_img.y_test, os.path.join(model_dir, 'umap'))
     
     return results
 
