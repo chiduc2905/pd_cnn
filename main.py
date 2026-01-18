@@ -1073,7 +1073,10 @@ def test(model, test_loader, args, device, test_X=None, test_y=None):
     pretrained_str = 'pretrained' if args.pretrained else 'scratch'
     samples_str = f'_{args.training_samples}samples' if args.training_samples else '_allsamples'
     
+    print(f'\n[DEBUG] eval_mode = {args.eval_mode}')  # Debug
+    
     if args.eval_mode == 'episode' and test_X is not None:
+
         # Multi-shot episodic evaluation (1-shot and 5-shot)
         results = evaluate_multishot(
             model, test_X, test_y, args, device, 
