@@ -1209,6 +1209,16 @@ def main():
     
     print(f'Train: {len(train_X)}, Val: {len(val_X)}, Test: {len(test_X)}')
     
+    # Safety check
+    if len(train_X) == 0:
+        raise ValueError(
+            f'No training data loaded from {args.dataset_path}!\n'
+            f'Please check:\n'
+            f'  1. Dataset path exists\n'
+            f'  2. Folder structure: dataset_path/train/{{corona,surface,NotPD}}/\n'
+            f'  3. Class names match: {list(CLASS_MAP.keys())}'
+        )
+    
     # Limit training samples if specified
     if args.training_samples:
         per_class = args.training_samples // args.num_classes
@@ -1228,10 +1238,17 @@ def main():
         train_y = torch.cat(y_list)
         print(f'Limited to {args.training_samples} training samples ({per_class}/class)')
     
+    
+    # Final safety check before creating DataLoader
+    if len(train_X) == 0:
+        raise ValueError('Training dataset is empty after sampling! Check training_samples parameter.')
+    
     # Create dataloaders
     train_dataset = TensorDataset(train_X, train_y)
     val_dataset = TensorDataset(val_X, val_y)
     test_dataset = TensorDataset(test_X, test_y)
+    
+    print(f'Final dataset sizes - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}')
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, 
                               shuffle=True, num_workers=0, pin_memory=True)
