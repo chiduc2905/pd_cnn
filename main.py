@@ -106,9 +106,10 @@ def get_args():
                         help='WandB project name')
     
     # Episode-based evaluation (aligned with mamba_glscnet for fair benchmark)
-    parser.add_argument('--eval_mode', type=str, default='episode',
+    parser.add_argument('--eval_mode', type=str, default='standard',
                         choices=['standard', 'episode'],
-                        help='Evaluation mode: standard (batch) or episode (few-shot style, default)')
+                        help='Evaluation mode: standard (batch, default for TL) or episode (few-shot style)')
+
     parser.add_argument('--episode_num_val', type=int, default=300,
                         help='Number of validation episodes (default: 300, same as mamba_glscnet)')
     parser.add_argument('--episode_num_test', type=int, default=300,
