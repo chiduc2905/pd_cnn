@@ -24,7 +24,7 @@ import wandb
 from dataset import load_dataset
 from net.models import (
     get_model, get_available_models, count_parameters, calculate_flops,
-    freeze_backbone, unfreeze_backbone, freeze_partial_backbone,
+    freeze_backbone, unfreeze_backbone,
     get_classifier_params, get_backbone_params
 )
 from function.function import plot_confusion_matrix, plot_tsne
