@@ -40,7 +40,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='PD Scalogram CNN Classification')
     
     # Paths
-    parser.add_argument('--dataset_path', type=str, default='/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_cnn/scalogram_v2_split')
+    parser.add_argument('--dataset_path', type=str, default='/mnt/disk2/nhatnc/res/scalogram_fewshot/proposed_model/smnet/scalogram_official')
     parser.add_argument('--path_weights', type=str, default='checkpoints/')
     parser.add_argument('--path_results', type=str, default='results/')
     parser.add_argument('--weights', type=str, default=None, help='Checkpoint for testing')

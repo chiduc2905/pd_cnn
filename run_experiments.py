@@ -41,7 +41,8 @@ MODELS = [
 ]
 
 # Dataset path (pre-split with train/val/test folders)
-DATASET_PATH = '/mnt/disk2/nhatnc/res/scalogram_fewshot/pulse_cnn/scalogram_official'
+DATASET_PATH = '/mnt/disk2/nhatnc/res/scalogram_fewshot/proposed_model/smnet/scalogram_official'
+
 
 # Training sample configurations
 TRAINING_SAMPLES = [30, 60, 150, None]  # None = use all training data
@@ -98,13 +99,14 @@ def run_experiment(model, training_samples=None, gpu=0, freeze_epochs=DEFAULT_FR
     samples_str = f'{training_samples}samples' if training_samples else 'all'
     finetune_str = 'no-finetune' if no_finetune else 'finetune'
     
-    print(f'\\n{\"=\"*60}')
+    print(f'\n{"="*60}')
     print(f'Experiment #{experiment_id}: {model} | {samples_str} | {finetune_str}')
     if no_finetune:
         print(f'Mode: Feature Extraction ({freeze_epochs} epochs, classifier only)')
     else:
-        print(f'Mode: {freeze_epochs} epochs freeze + {kwargs.get(\"num_epochs\", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
-    print(f'{\"=\"*60}\\n')
+        print(f'Mode: {freeze_epochs} epochs freeze + {kwargs.get("num_epochs", DEFAULT_NUM_EPOCHS) - freeze_epochs} epochs fine-tune')
+    print(f'{"="*60}\n')
+
     
     result = subprocess.run(cmd, check=False)
     
