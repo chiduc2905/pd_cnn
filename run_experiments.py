@@ -176,7 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_epochs', type=int, default=DEFAULT_NUM_EPOCHS)
     parser.add_argument('--freeze_epochs', type=int, default=DEFAULT_FREEZE_EPOCHS)
     parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--eval_mode', type=str, default='episode', choices=['standard', 'episode'])
+    parser.add_argument('--eval_mode', type=str, default='standard', choices=['standard', 'episode'])
     parser.add_argument('--episode_num_val', type=int, default=150)
     parser.add_argument('--episode_num_test', type=int, default=150)
     parser.add_argument('--query_per_class', type=int, default=5)
