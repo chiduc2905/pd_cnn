@@ -703,7 +703,7 @@ def run_transfer_learning_pipeline(X_train, y_train, X_test, y_test, args=None,
 # New Transfer Learning Fine-Tuning Pipeline with Two-Phase Training
 
 def run_transfer_learning_finetune(X_train, y_train, X_val, y_val, X_test, y_test, args,
-                                    model_names=['vgg19', 'resnet50', 'densenet201'],
+                                    model_names=None,
                                     num_classes=3, freeze_epochs=10, num_epochs=50, batch_size=32,
                                     lr_classifier=0.001, lr_backbone=1e-5, lr_classifier_finetune=1e-4,
                                     device='cuda'):
@@ -717,8 +717,13 @@ def run_transfer_learning_finetune(X_train, y_train, X_val, y_val, X_test, y_tes
     - WandB logging
     - Test-only evaluation
     """
+    # Use default paper models if not specified
+    if model_names is None:
+        model_names = args.tl_models if hasattr(args, 'tl_models') and args.tl_models else ['vgg19', 'resnet50', 'densenet201']
+    
     print("\n" + "="*60)
     print("PIPELINE C-FT: Transfer Learning - Two-Phase Fine-Tuning")
+    print(f"Models: {', '.join(model_names)}")
     print("="*60)
     
     results = {}
@@ -1543,6 +1548,9 @@ if __name__ == '__main__':
                         help='Learning rate for backbone (Phase 2)')
     parser.add_argument('--lr_classifier_finetune', type=float, default=1e-4,
                         help='Learning rate for classifier (Phase 2)')
+    parser.add_argument('--tl_models', type=str, nargs='+', 
+                        default=['vgg19', 'resnet50', 'densenet201'],
+                        help='Models for TL fine-tuning (from net/models.py MODEL_INFO)')
     
     args = parser.parse_args()
     
