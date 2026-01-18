@@ -276,16 +276,35 @@ def plot_tsne(features, labels, num_classes=4, save_path=None, class_names=None)
     scaler = StandardScaler()
     features_scaled = scaler.fit_transform(features)
     
-    # 2. PCA (reduce to 30 dims or less)
-    n_components = min(30, n, features.shape[1])
+    # 2. PCA (increase to 50 dims for better feature preservation)
+    n_components = min(50, n, features.shape[1])
     pca = PCA(n_components=n_components, random_state=42)
     features_pca = pca.fit_transform(features_scaled)
-    print(f"  PCA reduced to {n_components} dimensions")
+    explained_variance = pca.explained_variance_ratio_.sum()
+    print(f"  PCA reduced to {n_components} dimensions (explained variance: {explained_variance:.2%})")
     
-    perp = min(30, max(5, n // 3))
+    # Dynamic perplexity
+    n_samples = len(features_pca)
+    perp = min(30, max(5, n_samples // 50))
+    print(f"  Using perplexity = {perp} for {n_samples} samples (dynamic scaling)")
     
-    tsne = TSNE(n_components=2, perplexity=perp, random_state=42, init='pca')
+    tsne = TSNE(
+        n_components=2, 
+        perplexity=perp, 
+        random_state=42, 
+        init='pca',
+        learning_rate=250.0,
+        max_iter=3000,
+        early_exaggeration=24.0,
+        n_iter_without_progress=500,
+        metric='cosine'
+    )
     embedded = tsne.fit_transform(features_pca)
+    
+    # Rescale to [-48, 48]
+    max_val = np.abs(embedded).max()
+    if max_val > 0:
+        embedded = embedded / max_val * 48
     
     # Save in 2-column IEEE layout only
     width = 7.16  # 2-column: 7.16 inches
@@ -311,27 +330,45 @@ def plot_tsne(features, labels, num_classes=4, save_path=None, class_names=None)
         class_name = class_names[i] if i < len(class_names) else str(label)
         color = custom_colors[int(label)] if int(label) < len(custom_colors) else '#333333'
         
-        # Scatter plot with circle markers and WHITE EDGE
+        # Scatter plot - no edges, pure color
         ax.scatter(
             embedded[mask, 0], embedded[mask, 1],
-            c=[color], s=40, alpha=0.85,
-            marker='o',  # Circle marker
-            edgecolors='white', linewidths=0.5,
-            label=class_name
+            c=[color], 
+            s=35,              # Small markers for density visualization
+            alpha=0.8,         # Mostly opaque - subtle density effect without looking washed out
+            marker='o',
+            label=class_name,
+            zorder=3
         )
     
-    # Auto-scale axes (no fixed limits)
+    # Fixed axes for consistency
+    ax.set_xlim(-60, 60)
+    ax.set_ylim(-60, 60)
     ax.set_xlabel('')
     ax.set_ylabel('')
     ax.tick_params(axis='both', which='major', labelsize=10)
     ax.set_aspect('equal')
     
     # Light grid
-    ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+    ax.grid(True, alpha=0.25, linestyle='--', linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
     
+    # Clean spines
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.2)
+    
     # Legend
-    ax.legend(loc='upper right', fontsize=9)
+    legend = ax.legend(
+        loc='upper right',
+        fontsize=10,
+        frameon=True,
+        framealpha=0.95,
+        edgecolor='gray',
+        fancybox=False,
+        borderpad=0.4,
+        handletextpad=0.3
+    )
+    legend.get_frame().set_linewidth(0.8)
     
     plt.tight_layout()
     if save_path:
