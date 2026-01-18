@@ -483,13 +483,14 @@ def evaluate_episodic_finetune(model, X, y, num_episodes, shot_num, query_per_cl
         
         # === Freeze backbone, only train classifier ===
         freeze_backbone(model_copy)
-        classifier_params = get_classifier_params(model_copy)
+        classifier_params = list(get_classifier_params(model_copy))
         
         if len(classifier_params) == 0:
             # Fallback: train all parameters if classifier not found
             classifier_params = list(model_copy.parameters())
         
         optimizer = torch.optim.SGD(classifier_params, lr=finetune_lr, momentum=0.9)
+
         criterion = nn.CrossEntropyLoss()
         
         # === Measure total time (finetune + inference) ===
