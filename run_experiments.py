@@ -81,7 +81,13 @@ def run_experiment(model, training_samples=None, gpu=0, freeze_epochs=DEFAULT_FR
         '--image_size', str(image_size),
         '--experiment_id', str(experiment_id),
         '--dataset_path', DATASET_PATH,
+        # Episodic evaluation settings (aligned with mamba_glscnet)
+        '--episode_num_val', '300',
+        '--episode_num_test', '300',
+        '--query_per_class', '5',
+        '--episodic_finetune',  # Enable true few-shot evaluation
     ]
+
     
     if no_finetune:
         cmd.append('--no_finetune')

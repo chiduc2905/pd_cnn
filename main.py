@@ -105,18 +105,26 @@ def get_args():
     parser.add_argument('--project', type=str, default='pd_cnn',
                         help='WandB project name')
     
-    # Episode-based evaluation (for fair benchmark with few-shot)
+    # Episode-based evaluation (aligned with mamba_glscnet for fair benchmark)
     parser.add_argument('--eval_mode', type=str, default='episode',
                         choices=['standard', 'episode'],
                         help='Evaluation mode: standard (batch) or episode (few-shot style, default)')
-    parser.add_argument('--episode_num_val', type=int, default=150,
-                        help='Number of validation episodes (default: 150)')
-    parser.add_argument('--episode_num_test', type=int, default=200,
-                        help='Number of test episodes (default: 200)')
-    parser.add_argument('--query_per_class', type=int, default=1,
-                        help='Query samples per class per episode (default: 1)')
+    parser.add_argument('--episode_num_val', type=int, default=300,
+                        help='Number of validation episodes (default: 300, same as mamba_glscnet)')
+    parser.add_argument('--episode_num_test', type=int, default=300,
+                        help='Number of test episodes (default: 300, same as mamba_glscnet)')
+    parser.add_argument('--query_per_class', type=int, default=5,
+                        help='Query samples per class per episode (default: 5, same as mamba_glscnet)')
     parser.add_argument('--shot_list', type=str, default='1,5',
                         help='Comma-separated list of shot settings to evaluate (default: 1,5)')
+    
+    # Episodic fine-tuning (true few-shot evaluation)
+    parser.add_argument('--episodic_finetune', action='store_true',
+                        help='Enable episodic fine-tuning: fine-tune classifier on support, test on query')
+    parser.add_argument('--finetune_steps', type=int, default=100,
+                        help='Fine-tune steps per episode (default: 100, from Baseline++ paper)')
+    parser.add_argument('--finetune_lr', type=float, default=0.01,
+                        help='Fine-tune learning rate (default: 0.01)')
     
     # Experiment tracking
     parser.add_argument('--experiment_id', type=int, default=None,
@@ -416,14 +424,140 @@ def evaluate_episodic_kshot(model, X, y, num_episodes, shot_num, query_per_class
     return mean_acc, std_acc, ci95, min_acc, max_acc, np.array(all_preds), np.array(all_labels), inference_time
 
 
+def evaluate_episodic_finetune(model, X, y, num_episodes, shot_num, query_per_class,
+                                num_classes, seed, device, finetune_steps=100, finetune_lr=0.01):
+    """True few-shot evaluation: fine-tune classifier on support, test on query.
+    
+    For each episode:
+      1. Sample K support samples + Q query samples per class
+      2. Clone model
+      3. Freeze backbone, fine-tune only classifier on support (100 steps)
+      4. Test on query
+      5. Report mean ± std with 95% CI
+    
+    This is the "Baseline++" style evaluation from Chen et al. (2019).
+    
+    Args:
+        model: PyTorch model (already trained)
+        X: Test images array (N, C, H, W)
+        y: Test labels array (N,)
+        num_episodes: Number of episodes to evaluate
+        shot_num: Support samples per class (K-shot)
+        query_per_class: Query samples per class per episode
+        num_classes: Number of classes
+        seed: Random seed
+        device: torch device
+        finetune_steps: Number of SGD steps to fine-tune classifier (default: 100)
+        finetune_lr: Learning rate for fine-tuning (default: 0.01)
+        
+    Returns:
+        mean_acc, std_acc, ci95, min_acc, max_acc, all_preds, all_labels, inference_time
+    """
+    import time
+    import copy
+    
+    generator = EpisodeFewShotGenerator(
+        X, y, num_classes,
+        shot_num=shot_num,
+        query_per_class=query_per_class,
+        seed=seed
+    )
+    
+    episode_accs = []
+    all_preds, all_labels = [], []
+    episode_times = []
+    total_samples = 0
+    
+    for ep in tqdm(range(num_episodes), desc=f'{shot_num}-shot Finetune Eval', leave=False):
+        # Sample episode
+        support_X, support_y, query_X, query_y = generator.sample_episode()
+        
+        support_X_tensor = torch.from_numpy(support_X.astype(np.float32)).to(device)
+        support_y_tensor = torch.from_numpy(support_y).long().to(device)
+        query_X_tensor = torch.from_numpy(query_X.astype(np.float32)).to(device)
+        query_y_tensor = torch.from_numpy(query_y).long().to(device)
+        
+        # === Clone model for this episode ===
+        model_copy = copy.deepcopy(model)
+        model_copy.to(device)
+        
+        # === Freeze backbone, only train classifier ===
+        freeze_backbone(model_copy)
+        classifier_params = get_classifier_params(model_copy)
+        
+        if len(classifier_params) == 0:
+            # Fallback: train all parameters if classifier not found
+            classifier_params = list(model_copy.parameters())
+        
+        optimizer = torch.optim.SGD(classifier_params, lr=finetune_lr, momentum=0.9)
+        criterion = nn.CrossEntropyLoss()
+        
+        # === Measure total time (finetune + inference) ===
+        start_time = time.perf_counter()
+        
+        # === Fine-tune classifier on support set ===
+        model_copy.train()
+        for step in range(finetune_steps):
+            optimizer.zero_grad()
+            outputs = model_copy(support_X_tensor)
+            loss = criterion(outputs, support_y_tensor)
+            loss.backward()
+            optimizer.step()
+        
+        # === Test on query set ===
+        model_copy.eval()
+        with torch.no_grad():
+            outputs = model_copy(query_X_tensor)
+            _, predicted = outputs.max(1)
+        
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        
+        end_time = time.perf_counter()
+        episode_times.append(end_time - start_time)
+        total_samples += len(query_y)
+        
+        # Per-episode accuracy
+        correct = predicted.eq(query_y_tensor).sum().item()
+        episode_accs.append(correct / len(query_y))
+        
+        all_preds.extend(predicted.cpu().numpy())
+        all_labels.extend(query_y)
+        
+        # Clean up
+        del model_copy
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+    
+    mean_acc = np.mean(episode_accs)
+    std_acc = np.std(episode_accs)
+    ci95 = 1.96 * std_acc / np.sqrt(num_episodes)
+    min_acc = np.min(episode_accs)
+    max_acc = np.max(episode_accs)
+    
+    total_time = sum(episode_times)
+    inference_time = {
+        'total': total_time,
+        'avg_per_episode': np.mean(episode_times),
+        'avg_per_sample': total_time / total_samples if total_samples > 0 else 0,
+        'total_samples': total_samples
+    }
+    
+    return mean_acc, std_acc, ci95, min_acc, max_acc, np.array(all_preds), np.array(all_labels), inference_time
+
+
 def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
     """Evaluate model with multiple shot settings (e.g., 1-shot and 5-shot).
+    
+    Supports two modes:
+    - Inference only (default): Just forward pass on query
+    - Episodic fine-tuning (--episodic_finetune): Fine-tune classifier on support, test on query
     
     Args:
         model: PyTorch model
         X: Images array
         y: Labels array
-        args: Arguments with shot_list, query_per_class, num_classes, seed
+        args: Arguments with shot_list, query_per_class, num_classes, seed, episodic_finetune
         device: torch device
         num_episodes: Number of episodes
         phase: 'val' or 'test' (for logging)
@@ -434,30 +568,50 @@ def evaluate_multishot(model, X, y, args, device, num_episodes, phase='test'):
     shot_list = [int(s) for s in args.shot_list.split(',')]
     results = {}
     
+    eval_mode = "Episodic Fine-tune" if getattr(args, 'episodic_finetune', False) else "Inference Only"
+    
     print(f'\n{"="*60}')
     print(f'{phase.upper()} Episodic Evaluation ({num_episodes} episodes)')
+    print(f'Mode: {eval_mode}')
     print(f'Shot settings: {shot_list}')
     print(f'Query per class: {args.query_per_class}')
+    if getattr(args, 'episodic_finetune', False):
+        print(f'Fine-tune steps: {args.finetune_steps}, LR: {args.finetune_lr}')
     print(f'{"="*60}')
     
     for shot_num in shot_list:
-        mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time = evaluate_episodic_kshot(
-            model, X, y, num_episodes, 
-            shot_num=shot_num,
-            query_per_class=args.query_per_class,
-            num_classes=args.num_classes,
-            seed=args.seed,
-            device=device
-        )
+        if getattr(args, 'episodic_finetune', False):
+            # True few-shot: fine-tune on support, test on query
+            mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time = evaluate_episodic_finetune(
+                model, X, y, num_episodes,
+                shot_num=shot_num,
+                query_per_class=args.query_per_class,
+                num_classes=args.num_classes,
+                seed=args.seed,
+                device=device,
+                finetune_steps=args.finetune_steps,
+                finetune_lr=args.finetune_lr
+            )
+        else:
+            # Inference only (no weight updates)
+            mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time = evaluate_episodic_kshot(
+                model, X, y, num_episodes, 
+                shot_num=shot_num,
+                query_per_class=args.query_per_class,
+                num_classes=args.num_classes,
+                seed=args.seed,
+                device=device
+            )
         
         results[shot_num] = (mean_acc, std_acc, ci95, min_acc, max_acc, preds, labels, inference_time)
         
         print(f'  {shot_num}-shot:')
         print(f'    Accuracy: {mean_acc*100:.2f} ± {std_acc*100:.2f}% (95% CI: ±{ci95*100:.2f}%)')
         print(f'    Worst-case: {min_acc*100:.2f}% | Best: {max_acc*100:.2f}%')
-        print(f'    Inference: {inference_time["avg_per_sample"]*1000:.3f} ms/sample')
+        print(f'    Time: {inference_time["avg_per_episode"]*1000:.1f} ms/episode')
     
     return results
+
 
 
 # =============================================================================
