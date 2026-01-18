@@ -1274,7 +1274,7 @@ def main():
         input_size=(1, 3, args.image_size, args.image_size),
         device=str(device)
     )
-    print(f'FLOPs: {flops_info["flops_str"]} (MACs: {flops_info["macs_str"]})')
+    print(f'FLOPs: {flops_info.get("flops_str", "N/A")} (MACs: {flops_info.get("macs_str", "N/A")})')
     
     # Initialize WandB
     pretrained_str = 'pretrained' if args.pretrained else 'scratch'

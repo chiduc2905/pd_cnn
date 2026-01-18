@@ -125,14 +125,14 @@ def run_all(models=None, training_samples=None, finetune_modes=None,
     
     total_experiments = len(models) * len(training_samples) * len(finetune_modes)
     
-    print(f'\\n{\"=\"*80}')
+    print(f'\n{"="*80}')
     print(f'PD CNN EXPERIMENTS')
-    print(f'{\"=\"*80}')
+    print(f'{"="*80}')
     print(f'Dataset: {DATASET_PATH}')
-    print(f'Training samples: {[s if s else \"all\" for s in training_samples]}')
-    print(f'Modes: {[\"finetune\" if m else \"no-finetune\" for m in finetune_modes]}')
+    print(f'Training samples: {[s if s else "all" for s in training_samples]}')
+    print(f'Modes: {["finetune" if m else "no-finetune" for m in finetune_modes]}')
     print(f'Total experiments: {total_experiments}')
-    print(f'{\"=\"*80}')
+    print(f'{"="*80}')
     
     results = []
     experiment_id = 0
@@ -149,9 +149,9 @@ def run_all(models=None, training_samples=None, finetune_modes=None,
         results.append((experiment_id, model, samples, do_finetune, success))
     
     # Summary
-    print(f'\\n{\"=\"*80}')
+    print(f'\n{"="*80}')
     print('SUMMARY')
-    print(f'{\"=\"*80}')
+    print(f'{"="*80}')
     for exp_id, model, samples, do_finetune, success in results:
         samples_str = f'{samples}' if samples else 'all'
         mode = 'FT' if do_finetune else 'FE'
@@ -159,7 +159,7 @@ def run_all(models=None, training_samples=None, finetune_modes=None,
         print(f'{status} Exp#{exp_id:03d} {model:20s} | {samples_str:>4s} samples | {mode}')
     
     passed = sum(1 for *_, s in results if s)
-    print(f'\\nTotal: {passed}/{total_experiments} passed')
+    print(f'\nTotal: {passed}/{total_experiments} passed')
     return results
 
 
